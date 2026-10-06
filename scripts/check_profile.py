@@ -10,8 +10,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-CATALOG = "https://raw.githubusercontent.com/probityai/agent-evidence-atlas/58b6e8ebb2140ca229d969180423c3af25158bd4/docs/catalog.json"
-CATALOG_SHA256 = "d3dc9e449cbf5911b405034768db89d8a0cc99916a0991f6e997d9759782e613"
+CATALOG = "https://raw.githubusercontent.com/probityai/agent-evidence-atlas/0f5d25ab4cb00337f332eb109ac0dbc8b5651e00/docs/catalog.json"
+CATALOG_SHA256 = "36787e078dea04edaff9d769005b033ec5d8c5a6316bde7450c1a55aef677089"
 LINK = re.compile(r"\[([^\]]+)\]\(([^\s)]+)\)")
 ROW = re.compile(r"^\| ([^|]+) \| \[([^\]]+)\]\(([^\s)]+)\) \|$", re.MULTILINE)
 HOSTS = {"github.com", "raw.githubusercontent.com", "probityai.github.io"}
