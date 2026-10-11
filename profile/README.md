@@ -20,6 +20,14 @@ Use the [replay procedure](https://probityai.github.io/agent-evidence-atlas/repl
 | Install a pinned verifier and check an evidence claim | [Probity Verify](https://github.com/probityai/probity-verify/blob/437e484bd81e3d1eb1b9ad7230124a434a7a0ef6/README.md) |
 | Use shared definitions for agent evidence claims | [Probity Vocabulary](https://github.com/probityai/agent-evidence-vocabulary/blob/4029a7801e0ec61a9818fd1e6c1cbd236e2c82bc/README.md) |
 
+## Prove an agent harness change
+
+[Ratchet](https://github.com/probityai/ratchet) turns each observed agent failure into an executable guard.
+It proves the guard by replay against recorded history and fresh held-out runs before admitting it, and signs
+every admission decision with the
+[agent change admission predicate](https://github.com/probityai/agent-evidence-vocabulary/blob/main/docs/predicates/agent-change-admission-v1.md).
+It joins the tool table above when its first commit is pinned in the reviewed catalog.
+
 ## Current releases
 
 | Project | Release | Pinned install |
