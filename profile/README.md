@@ -26,7 +26,9 @@ Ratchet turns each observed agent failure into an executable guard.
 It proves the guard by replay against recorded history and fresh held-out runs before admitting it, and signs
 every admission decision with the
 [agent change admission predicate](https://github.com/probityai/agent-evidence-vocabulary/blob/main/docs/predicates/agent-change-admission-v1.md).
-Its repository opens with its first public release, and it joins the tool table above when that commit is pinned in the reviewed catalog.
+Install it with `pip install probity-ratchet==0.1.0`; its
+[README](https://github.com/probityai/ratchet/blob/9736ff12cbf3aff589898b8ae7003cdb13fdf111/README.md)
+gives the commands and the recorded results.
 
 ## Current releases
 
