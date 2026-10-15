@@ -32,15 +32,7 @@ gives the commands and the recorded results.
 
 ## Current releases
 
-| Project | Release | Pinned install |
-| --- | --- | --- |
-| Vectors | [v0.17.6](https://github.com/probityai/agent-evidence-vectors/releases/tag/v0.17.6) | `pip install agent-evidence-vectors==0.17.6` |
-| Admission | [py-v0.1.0](https://github.com/probityai/agent-evidence-admission/releases/tag/py-v0.1.0) | `pip install agent-evidence-admission==0.1.0` |
-| Vocabulary | [v0.3.0](https://github.com/probityai/agent-evidence-vocabulary/releases/tag/v0.3.0) | `git clone --branch v0.3.0 https://github.com/probityai/agent-evidence-vocabulary` |
-| dsse | [v0.1.2](https://github.com/probityai/dsse/releases/tag/v0.1.2) | `cargo add dsse@=0.1.2` |
-| jcs-admit | [v0.1.1](https://github.com/probityai/jcs-admit/releases/tag/v0.1.1) | `cargo add jcs-admit@=0.1.1` |
-
-Observer, Verify and Atlas have no tagged release yet; their READMEs give source-pinned install steps.
+Find release states, source revisions and pinned install commands in the [Atlas project catalog](https://probityai.github.io/agent-evidence-atlas/start.html).
 
 Try a worked task:
 
