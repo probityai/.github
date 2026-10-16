@@ -21,7 +21,8 @@ class ProfileControls(unittest.TestCase):
                      for item in self.catalog["components"]]
         self.front_door = "\n".join(f"[{name}](https://probityai.github.io/agent-evidence-atlas/{name})"
                                      for name in ("start.html", "start.md", "llms.txt", "lab.html"))
-        self.text = "\n".join(self.rows) + "\n" + self.front_door
+        self.install = "```bash\nuvx agent-evidence-vectors==0.18.0\n```"
+        self.text = self.install + "\n" + "\n".join(self.rows) + "\n" + self.front_door
 
     def test_complete_profile(self):
         self.assertEqual(len(CHECK.validate_profile(self.text, self.catalog)), 12)
@@ -67,6 +68,15 @@ class ProfileControls(unittest.TestCase):
         for name in ("start.html", "start.md", "llms.txt", "lab.html"):
             with self.subTest(surface=name), self.assertRaises(ValueError):
                 CHECK.validate_profile(self.text.replace(name, "missing"), self.catalog)
+
+    def test_badge_host_is_allowed(self):
+        badge = "[![v](https://img.shields.io/pypi/v/agent-evidence-vectors.svg)](https://github.com/probityai/x)"
+        self.assertEqual(len(CHECK.validate_profile(self.text + "\n" + badge, self.catalog)), 14)
+
+    def test_badge_outer_link_is_checked(self):
+        badge = "[![v](https://img.shields.io/pypi/v/x.svg)](https://example.com/elsewhere)"
+        with self.assertRaises(ValueError):
+            CHECK.validate_profile(self.text + "\n" + badge, self.catalog)
 
     def test_nonpublic_or_authenticated_links_refuse(self):
         for url in ("http://github.com/probityai", "https://example.com/private", "file:///tmp/data",

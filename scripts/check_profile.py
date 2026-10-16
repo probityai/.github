@@ -12,9 +12,10 @@ from urllib.request import Request, urlopen
 
 CATALOG = "https://raw.githubusercontent.com/probityai/agent-evidence-atlas/35bd66c8d800f89bbd8ca2e596b35fef083cd78c/docs/catalog.json"
 CATALOG_SHA256 = "b911ab35428e90bc61a030d21e63dd0e5e518b5fbc1315e624d9c4132c2ffbaa"
-LINK = re.compile(r"\[([^\]]+)\]\(([^\s)]+)\)")
+# Every `](target)`, so the outer link of a badge (`[![alt](image)](target)`) is read as well as its image.
+LINK = re.compile(r"\]\(([^\s)]+)\)")
 ROW = re.compile(r"^\| ([^|]+) \| \[([^\]]+)\]\(([^\s)]+)\) \|$", re.MULTILINE)
-HOSTS = {"github.com", "raw.githubusercontent.com", "probityai.github.io"}
+HOSTS = {"github.com", "raw.githubusercontent.com", "probityai.github.io", "img.shields.io"}
 
 
 def fetch(url: str) -> bytes:
@@ -53,7 +54,7 @@ def validate_profile(text: str, catalog: dict) -> list[str]:
     rows = ROW.findall(text)
     if len(rows) != len(components) or len(set(rows)) != len(rows) or set(rows) != expected:
         raise ValueError("The profile must contain every reviewed task/source pair exactly once")
-    links = [url for _, url in LINK.findall(text)]
+    links = LINK.findall(text)
     for url in links:
         parts = urlsplit(url)
         if parts.scheme != "https" or parts.hostname not in HOSTS or parts.username or parts.password:
