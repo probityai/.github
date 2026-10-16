@@ -1,5 +1,22 @@
 # Probity
 
+**Evidence about AI agent actions that anyone can check again from the bytes.**
+
+[![agent-evidence-vectors on PyPI](https://img.shields.io/pypi/v/agent-evidence-vectors.svg?label=agent-evidence-vectors)](https://github.com/probityai/agent-evidence-vectors)
+[![probity-verify on PyPI](https://img.shields.io/pypi/v/probity-verify.svg?label=probity-verify)](https://github.com/probityai/probity-verify)
+[![jcs-admit on crates.io](https://img.shields.io/crates/v/jcs-admit.svg?label=jcs-admit)](https://github.com/probityai/jcs-admit)
+[![dsse on crates.io](https://img.shields.io/crates/v/dsse.svg?label=dsse)](https://github.com/probityai/dsse)
+
+![An intact archive verifies, a changed byte fails, a missing artifact is not established, and a changed verifier keeps both outcomes](https://raw.githubusercontent.com/probityai/agent-evidence-vectors/49477c557be579327867ef4d77e73fe220208053/demo/four-arms.gif)
+
+Replay a public conformance corpus through the bundled reference verifier, with nothing to clone. Python 3.11+ and uv are enough:
+
+```bash
+uvx agent-evidence-vectors==0.18.0
+```
+
+Add `--verifier "<your command>"` to test your own verifier against the same records.
+
 Check any verifier of signed AI-agent and supply-chain records against a public corpus. Choose a tool by task.
 
 Explore retained runs or contribute one in the [Open Evidence Lab](https://probityai.github.io/agent-evidence-atlas/lab.html).

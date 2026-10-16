@@ -16,6 +16,7 @@ CATALOG_SHA256 = "b911ab35428e90bc61a030d21e63dd0e5e518b5fbc1315e624d9c4132c2ffb
 LINK = re.compile(r"\]\(([^\s)]+)\)")
 ROW = re.compile(r"^\| ([^|]+) \| \[([^\]]+)\]\(([^\s)]+)\) \|$", re.MULTILINE)
 HOSTS = {"github.com", "raw.githubusercontent.com", "probityai.github.io", "img.shields.io"}
+INSTALL = re.compile(r"^```bash\nuvx agent-evidence-vectors==\d+\.\d+\.\d+\n```$", re.MULTILINE)
 
 
 def fetch(url: str) -> bytes:
@@ -59,6 +60,8 @@ def validate_profile(text: str, catalog: dict) -> list[str]:
         parts = urlsplit(url)
         if parts.scheme != "https" or parts.hostname not in HOSTS or parts.username or parts.password:
             raise ValueError(f"Unapproved public link: {url}")
+    if not INSTALL.search(text):
+        raise ValueError("The profile must open with one pinned uvx install of agent-evidence-vectors")
     for surface in ("start.html", "start.md", "llms.txt", "lab.html"):
         if f"https://probityai.github.io/agent-evidence-atlas/{surface}" not in links:
             raise ValueError(f"The public discovery link is missing: {surface}")

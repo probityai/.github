@@ -69,6 +69,13 @@ class ProfileControls(unittest.TestCase):
             with self.subTest(surface=name), self.assertRaises(ValueError):
                 CHECK.validate_profile(self.text.replace(name, "missing"), self.catalog)
 
+    def test_pinned_install_required(self):
+        for install in ("", "```bash\nuvx agent-evidence-vectors\n```",
+                        "```bash\nuvx agent-evidence-vectors==latest\n```",
+                        "```bash\npip install agent-evidence-vectors\n```"):
+            with self.subTest(install=install), self.assertRaises(ValueError):
+                CHECK.validate_profile(self.text.replace(self.install, install), self.catalog)
+
     def test_badge_host_is_allowed(self):
         badge = "[![v](https://img.shields.io/pypi/v/agent-evidence-vectors.svg)](https://github.com/probityai/x)"
         self.assertEqual(len(CHECK.validate_profile(self.text + "\n" + badge, self.catalog)), 14)
