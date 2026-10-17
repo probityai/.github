@@ -28,14 +28,16 @@ Use the [replay procedure](https://probityai.github.io/agent-evidence-atlas/repl
 
 | Task | Project |
 | --- | --- |
-| Evaluate admission policies or reserve cost before dispatch | [Probity Admission](https://github.com/probityai/agent-evidence-admission/blob/bbff435d11a7c0ec9bc0e8e65e6d8fc40c10b671/README.md) |
-| Choose a tool or inspect recorded claims and retained runs | [Probity Atlas](https://github.com/probityai/agent-evidence-atlas/blob/48b9648a277bc5177f9dce290551f385c6df2ba1/README.md) |
-| Sign and verify DSSE envelopes in Rust | [dsse](https://github.com/probityai/dsse/blob/35e418022b19bebedec13ebb4c31bc43b1c70caf/README.md) |
-| Reject duplicate JSON keys and canonicalize in Rust | [jcs-admit](https://github.com/probityai/jcs-admit/blob/fb32a68aa2772e51cee32bc14835075d88af3953/README.md) |
-| Record file actions or check native delegation evidence | [Probity Observer](https://github.com/probityai/agent-evidence-observer/blob/753932b42b00ab8257396112c529f840396f0ce7/README.md) |
-| Test a verifier against conformance cases | [Probity Vectors](https://github.com/probityai/agent-evidence-vectors/blob/44042ae1a8cbde9444e8ea24e6690a7e773af65b/README.md) |
-| Install a pinned verifier and check an evidence claim | [Probity Verify](https://github.com/probityai/probity-verify/blob/437e484bd81e3d1eb1b9ad7230124a434a7a0ef6/README.md) |
-| Use shared definitions for agent evidence claims | [Probity Vocabulary](https://github.com/probityai/agent-evidence-vocabulary/blob/4029a7801e0ec61a9818fd1e6c1cbd236e2c82bc/README.md) |
+| Choose a tool or inspect recorded claims and retained runs | [Agent Evidence Conformance Board](https://github.com/probityai/agent-evidence-atlas/blob/ec67f0375e008cb7befc19a31762490b5cbbe520/README.md) |
+| Sign and verify DSSE envelopes in Rust | [dsse](https://github.com/probityai/dsse/blob/8549e5e54080b5f8c864f8b3eba8f57af8bd9c51/README.md) |
+| Reject duplicate JSON keys and canonicalize in Rust | [jcs-admit](https://github.com/probityai/jcs-admit/blob/0a058d7b676fb452929337c528b893c7f2121062/README.md) |
+| Record file actions or check native delegation evidence | [Probity Observer](https://github.com/probityai/agent-evidence-observer/blob/6c251b9fe98946f96a721521a8ca424efd0b3550/README.md) |
+| Test a verifier against conformance cases | [Agent Evidence Vectors](https://github.com/probityai/agent-evidence-vectors/blob/9e596fbff7bb29809d38319aebb56f2141923eb2/README.md) |
+| Install a pinned verifier and check an evidence claim | [Probity Verify](https://github.com/probityai/probity-verify/blob/db28cc76e5f5aa6932d5122d9c6241ef7adb7fee/README.md) |
+| Use shared definitions for agent evidence claims | [Probity Vocabulary](https://github.com/probityai/agent-evidence-vocabulary/blob/59c93ac4529c1e8fdf6e7cdfff7a950740c873f3/README.md) |
+| Run a checkout composition and replay its retained claims | [Checkout composition reference](https://github.com/probityai/agent-checkout-runner/blob/297b5b182bb40605b62586eccbf93a9c68a4aee1/README.md) |
+| Check artifact digests or evaluate admission policies | [Probity Admission](https://github.com/probityai/agent-evidence-admission/blob/c8f34fe857a969a5a503e0792466b76797d66355/README.md) |
+| Check an agent guard against replay and regression cases | [Probity Ratchet](https://github.com/probityai/ratchet/blob/b2800b26ec6cf60fee8e95682660846f674f97c2/README.md) |
 
 ## Prove an agent harness change
 

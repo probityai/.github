@@ -10,8 +10,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-CATALOG = "https://raw.githubusercontent.com/probityai/agent-evidence-atlas/35bd66c8d800f89bbd8ca2e596b35fef083cd78c/docs/catalog.json"
-CATALOG_SHA256 = "b911ab35428e90bc61a030d21e63dd0e5e518b5fbc1315e624d9c4132c2ffbaa"
+CATALOG = "https://raw.githubusercontent.com/probityai/agent-evidence-atlas/4f2b0fde485bb56a6a4086cbb27c1495ff39f5e1/docs/catalog.json"
+CATALOG_SHA256 = "5686322f48ff9b9de104c24eeaf6f3b2ec0bcbf2c48594f89121201d79b1849a"
 # Every `](target)`, so the outer link of a badge (`[![alt](image)](target)`) is read as well as its image.
 LINK = re.compile(r"\]\(([^\s)]+)\)")
 ROW = re.compile(r"^\| ([^|]+) \| \[([^\]]+)\]\(([^\s)]+)\) \|$", re.MULTILINE)
