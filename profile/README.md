@@ -4,15 +4,15 @@
 
 [![agent-evidence-vectors on PyPI](https://img.shields.io/pypi/v/agent-evidence-vectors.svg?label=agent-evidence-vectors)](https://github.com/probityai/agent-evidence-vectors)
 [![probity-verify on PyPI](https://img.shields.io/pypi/v/probity-verify.svg?label=probity-verify)](https://github.com/probityai/probity-verify)
-[![jcs-admit on crates.io](https://img.shields.io/crates/v/jcs-admit.svg?label=jcs-admit)](https://github.com/probityai/jcs-admit)
-[![dsse on crates.io](https://img.shields.io/crates/v/dsse.svg?label=dsse)](https://github.com/probityai/dsse)
+[![jcs-admit on crates.io](https://img.shields.io/crates/v/jcs-admit.svg?label=jcs-admit)](https://github.com/probityai/agent-evidence/tree/main/crates/jcs-admit)
+[![dsse on crates.io](https://img.shields.io/crates/v/dsse.svg?label=dsse)](https://github.com/probityai/agent-evidence/tree/main/crates/dsse)
 
 ![An intact archive verifies, a changed byte fails, a missing artifact is not established, and a changed verifier keeps both outcomes](https://raw.githubusercontent.com/probityai/agent-evidence-vectors/49477c557be579327867ef4d77e73fe220208053/demo/four-arms.gif)
 
 Replay a public conformance corpus through the bundled reference verifier, with nothing to clone. Python 3.11+ and uv are enough:
 
 ```bash
-uvx agent-evidence-vectors==0.18.0
+uvx agent-evidence-vectors==0.20.0
 ```
 
 Add `--verifier "<your command>"` to test your own verifier against the same records.
@@ -44,8 +44,8 @@ Use the [replay procedure](https://probityai.github.io/agent-evidence-atlas/repl
 Ratchet turns each observed agent failure into an executable guard.
 It proves the guard by replay against recorded history and fresh held-out runs before admitting it, and signs
 every admission decision with the
-[agent change admission predicate](https://github.com/probityai/agent-evidence-vocabulary/blob/main/docs/predicates/agent-change-admission-v1.md).
-Install it with `pip install probity-ratchet==0.1.0`; its
+[agent change admission predicate](https://github.com/probityai/agent-evidence/blob/main/packages/vocabulary/docs/predicates/agent-change-admission-v1.md).
+Install it with `pip install probity-ratchet==0.1.2`; its
 [README](https://github.com/probityai/ratchet/blob/9736ff12cbf3aff589898b8ae7003cdb13fdf111/README.md)
 gives the commands and the recorded results.
 
