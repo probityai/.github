@@ -24,6 +24,11 @@ Browse the task catalog in [HTML](https://probityai.github.io/agent-evidence-atl
 Read the [agent guide](https://probityai.github.io/agent-evidence-atlas/llms.txt) for commands and pinned sources.
 Use the [replay procedure](https://probityai.github.io/agent-evidence-atlas/replay-tools.html) to run a published example and keep its evidence.
 
+## Start here
+
+- [Agent Evidence](https://github.com/probityai/agent-evidence): the open standard, with conformance vectors, a vocabulary, admission rules and the `dsse` and `jcs-admit` crates.
+- [Probity](https://github.com/probityai/probity): the verifier and the `probity` command.
+
 ## Choose a tool
 
 | Task | Project |
