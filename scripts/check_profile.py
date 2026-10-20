@@ -70,7 +70,7 @@ def validate_profile(text: str, catalog: dict) -> list[str]:
 
 def readback_target(url: str) -> str:
     """Read the pinned README bytes instead of GitHub's presentation HTML."""
-    match = re.fullmatch(r"https://github.com/(probityai/[^/]+)/blob/([0-9a-f]{40})/((?:[A-Za-z0-9._-]+/)*README\.md)", url)
+    match = re.fullmatch(r"https://github.com/(probityai/[^/]+)/blob/([0-9a-f]{40})/((?:(?!\.{1,2}/)[A-Za-z0-9._-]+/)*README\.md)", url)
     if match:
         repository, commit, path = match.groups()
         return f"https://raw.githubusercontent.com/{repository}/{commit}/{path}"
