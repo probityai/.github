@@ -33,16 +33,16 @@ Use the [replay procedure](https://probityai.github.io/agent-evidence-atlas/repl
 
 | Task | Project |
 | --- | --- |
-| Choose a tool or inspect recorded claims and retained runs | [Agent Evidence Conformance Board](https://github.com/probityai/agent-evidence-atlas/blob/ec67f0375e008cb7befc19a31762490b5cbbe520/README.md) |
-| Sign and verify DSSE envelopes in Rust | [dsse](https://github.com/probityai/dsse/blob/8549e5e54080b5f8c864f8b3eba8f57af8bd9c51/README.md) |
-| Reject duplicate JSON keys and canonicalize in Rust | [jcs-admit](https://github.com/probityai/jcs-admit/blob/0a058d7b676fb452929337c528b893c7f2121062/README.md) |
-| Record file actions or check native delegation evidence | [Probity Observer](https://github.com/probityai/agent-evidence-observer/blob/6c251b9fe98946f96a721521a8ca424efd0b3550/README.md) |
+| Choose a tool or inspect recorded claims and retained runs | [Agent Evidence Conformance Board](https://github.com/probityai/agent-evidence/blob/44066a188c1b080b7c9bd5a73f6626c229baaa14/site/README.md) |
+| Sign and verify DSSE envelopes in Rust | [dsse](https://github.com/probityai/agent-evidence/blob/44066a188c1b080b7c9bd5a73f6626c229baaa14/crates/dsse/README.md) |
+| Reject duplicate JSON keys and canonicalize in Rust | [jcs-admit](https://github.com/probityai/agent-evidence/blob/44066a188c1b080b7c9bd5a73f6626c229baaa14/crates/jcs-admit/README.md) |
+| Record file actions or check native delegation evidence | [Probity Observer](https://github.com/probityai/probity/blob/e2164379c19cf17a00356dfbdf625a998272ac58/packages/observer/README.md) |
 | Test a verifier against conformance cases | [Agent Evidence Vectors](https://github.com/probityai/agent-evidence-vectors/blob/9e596fbff7bb29809d38319aebb56f2141923eb2/README.md) |
 | Install a pinned verifier and check an evidence claim | [Probity Verify](https://github.com/probityai/probity-verify/blob/db28cc76e5f5aa6932d5122d9c6241ef7adb7fee/README.md) |
-| Use shared definitions for agent evidence claims | [Probity Vocabulary](https://github.com/probityai/agent-evidence-vocabulary/blob/59c93ac4529c1e8fdf6e7cdfff7a950740c873f3/README.md) |
-| Run a checkout composition and replay its retained claims | [Checkout composition reference](https://github.com/probityai/agent-checkout-runner/blob/297b5b182bb40605b62586eccbf93a9c68a4aee1/README.md) |
-| Check artifact digests or evaluate admission policies | [Probity Admission](https://github.com/probityai/agent-evidence-admission/blob/c8f34fe857a969a5a503e0792466b76797d66355/README.md) |
-| Check an agent guard against replay and regression cases | [Probity Ratchet](https://github.com/probityai/ratchet/blob/b2800b26ec6cf60fee8e95682660846f674f97c2/README.md) |
+| Use shared definitions for agent evidence claims | [Probity Vocabulary](https://github.com/probityai/agent-evidence/blob/44066a188c1b080b7c9bd5a73f6626c229baaa14/packages/vocabulary/README.md) |
+| Run a checkout composition and replay its retained claims | [Checkout composition reference](https://github.com/probityai/probity/blob/e2164379c19cf17a00356dfbdf625a998272ac58/examples/checkout-runner/README.md) |
+| Check artifact digests or evaluate admission policies | [Probity Admission](https://github.com/probityai/agent-evidence/blob/44066a188c1b080b7c9bd5a73f6626c229baaa14/packages/admission/README.md) |
+| Check an agent guard against replay and regression cases | [Probity Ratchet](https://github.com/probityai/probity/blob/e2164379c19cf17a00356dfbdf625a998272ac58/packages/ratchet/README.md) |
 
 ## Prove an agent harness change
 
@@ -51,7 +51,7 @@ It proves the guard by replay against recorded history and fresh held-out runs b
 every admission decision with the
 [agent change admission predicate](https://github.com/probityai/agent-evidence/blob/main/packages/vocabulary/docs/predicates/agent-change-admission-v1.md).
 Install it with `pip install probity-ratchet==0.1.2`; its
-[README](https://github.com/probityai/ratchet/blob/9736ff12cbf3aff589898b8ae7003cdb13fdf111/README.md)
+[README](https://github.com/probityai/probity/blob/e2164379c19cf17a00356dfbdf625a998272ac58/packages/ratchet/README.md)
 gives the commands and the recorded results.
 
 ## Current releases
@@ -60,8 +60,8 @@ Find release states, source revisions and pinned install commands in the [Atlas 
 
 Try a worked task:
 
-- [Issue a local refund with safe retries](https://github.com/probityai/agent-evidence-observer/blob/753932b42b00ab8257396112c529f840396f0ce7/docs/APS-REFUND-RETRIES.md).
-- [Check published trace records](https://github.com/probityai/jcs-admit/blob/fb32a68aa2772e51cee32bc14835075d88af3953/interop/mintid-trace-records-v2/README.md).
+- [Issue a local refund with safe retries](https://github.com/probityai/probity/blob/e2164379c19cf17a00356dfbdf625a998272ac58/packages/observer/docs/APS-REFUND-RETRIES.md).
+- [Check published trace records](https://github.com/probityai/agent-evidence/blob/44066a188c1b080b7c9bd5a73f6626c229baaa14/crates/jcs-admit/interop/mintid-trace-records-v2/README.md).
 
 Each project explains its supported commands and examples in its README.
 Verify links to source-pinned installation and checked task recipes. Admission
