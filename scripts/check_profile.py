@@ -15,8 +15,11 @@ CATALOG_SHA256 = "77b9ae467416616793862de7cb64133ceb84f467d5ba25f10ce8c00586334e
 # Every `](target)`, so the outer link of a badge (`[![alt](image)](target)`) is read as well as its image.
 LINK = re.compile(r"\]\(([^\s)]+)\)")
 ROW = re.compile(r"^\| ([^|]+) \| \[([^\]]+)\]\(([^\s)]+)\) \|$", re.MULTILINE)
-HOSTS = {"github.com", "raw.githubusercontent.com", "probityai.github.io", "img.shields.io"}
-INSTALL = re.compile(r"^```bash\nuvx agent-evidence-vectors==\d+\.\d+\.\d+\n```$", re.MULTILINE)
+HOSTS = {"github.com", "raw.githubusercontent.com", "probityai.github.io", "img.shields.io", "pypi.org"}
+# The page opens with one pinned install: the probityai command or the vectors corpus.
+INSTALL = re.compile(r"^```(?:bash|sh)\n(?:pip install probityai|uvx agent-evidence-vectors)==\d+\.\d+\.\d+\n", re.MULTILINE)
+# Every `name==X.Y.Z` pin in the page is held to the newest release on PyPI.
+PIN = re.compile(r"\b([a-z][a-z0-9-]*)==(\d+\.\d+\.\d+)\b")
 
 
 def fetch(url: str) -> bytes:
@@ -61,11 +64,17 @@ def validate_profile(text: str, catalog: dict) -> list[str]:
         if parts.scheme != "https" or parts.hostname not in HOSTS or parts.username or parts.password:
             raise ValueError(f"Unapproved public link: {url}")
     if not INSTALL.search(text):
-        raise ValueError("The profile must open with one pinned uvx install of agent-evidence-vectors")
+        raise ValueError("The profile must open with one pinned install of probityai or agent-evidence-vectors")
     for surface in ("start.html", "start.md", "llms.txt", "lab.html"):
         if f"https://probityai.github.io/agent-evidence-atlas/{surface}" not in links:
             raise ValueError(f"The public discovery link is missing: {surface}")
     return sorted(set(links))
+
+
+def stale_pins(text: str, latest: dict[str, str]) -> list[str]:
+    """Return every pinned package whose version is not the newest release."""
+    return sorted({f"{name}=={version} (newest {latest[name]})"
+                   for name, version in PIN.findall(text) if latest[name] != version})
 
 
 def readback_target(url: str) -> str:
@@ -84,6 +93,11 @@ def main() -> None:
     text = (Path(__file__).resolve().parents[1] / "profile/README.md").read_text()
     catalog = json.loads(raw)
     links = validate_profile(text, catalog)
+    names = sorted({name for name, _ in PIN.findall(text)})
+    latest = {name: json.loads(fetch(f"https://pypi.org/pypi/{name}/json"))["info"]["version"] for name in names}
+    stale = stale_pins(text, latest)
+    if stale:
+        raise ValueError("Pins behind PyPI: " + ", ".join(stale))
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(fetch, map(readback_target, links)))
     print(f"Profile matches all {len(catalog['components'])} reviewed task/source pairs; {len(results)} public links read back.")

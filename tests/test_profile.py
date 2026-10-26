@@ -34,6 +34,21 @@ class ProfileControls(unittest.TestCase):
         text = self.text + f"\n| {item['task']} | [{item['display_name']}]({item['docs_url']}) |"
         self.assertEqual(len(CHECK.validate_profile(text, catalog)), 13)
 
+    def test_probityai_install_opens_the_profile(self):
+        text = self.text.replace(self.install, "```sh\npip install probityai==0.1.0\nprobityai verify case.json\n```")
+        self.assertEqual(len(CHECK.validate_profile(text, self.catalog)), 12)
+
+    def test_unpinned_install_refuses(self):
+        for install in ("```sh\npip install probityai\n```", "```sh\nuvx agent-evidence-vectors\n```"):
+            with self.subTest(install=install), self.assertRaises(ValueError):
+                CHECK.validate_profile(self.text.replace(self.install, install), self.catalog)
+
+    def test_stale_pins_are_listed(self):
+        text = "pip install probityai==0.1.0 and probity-ratchet==0.1.2 and agent-evidence-vectors==0.26.0"
+        latest = {"probityai": "0.1.0", "probity-ratchet": "0.2.1", "agent-evidence-vectors": "0.26.0"}
+        self.assertEqual(CHECK.stale_pins(text, latest), ["probity-ratchet==0.1.2 (newest 0.2.1)"])
+        self.assertEqual(CHECK.stale_pins("probityai==0.1.0", {"probityai": "0.1.0"}), [])
+
     def test_duplicate_component_identity_refuses(self):
         self.catalog["components"][1]["id"] = self.catalog["components"][0]["id"]
         with self.assertRaises(ValueError):

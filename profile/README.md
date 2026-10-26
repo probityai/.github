@@ -1,33 +1,31 @@
 # Probity
 
-**Evidence about AI agent actions that anyone can check again from the bytes.**
+**Check what an AI agent did, from the bytes, before you trust it.**
 
-[![agent-evidence-vectors on PyPI](https://img.shields.io/pypi/v/agent-evidence-vectors.svg?label=agent-evidence-vectors)](https://github.com/probityai/agent-evidence-vectors)
-[![probity-verify on PyPI](https://img.shields.io/pypi/v/probity-verify.svg?label=probity-verify)](https://github.com/probityai/probity-verify)
-[![jcs-admit on crates.io](https://img.shields.io/crates/v/jcs-admit.svg?label=jcs-admit)](https://github.com/probityai/agent-evidence/tree/main/crates/jcs-admit)
-[![dsse on crates.io](https://img.shields.io/crates/v/dsse.svg?label=dsse)](https://github.com/probityai/agent-evidence/tree/main/crates/dsse)
+For platform, security and audit teams who receive a claim about an agent run and need a decision they can replay offline.
 
-![An intact archive verifies, a changed byte fails, a missing artifact is not established, and a changed verifier keeps both outcomes](https://raw.githubusercontent.com/probityai/agent-evidence-vectors/49477c557be579327867ef4d77e73fe220208053/demo/four-arms.gif)
-
-Replay a public conformance corpus through the bundled reference verifier, with nothing to clone. Python 3.11+ and uv are enough:
-
-```bash
-uvx agent-evidence-vectors==0.20.0
+```sh
+pip install probityai==0.1.0
+samples="$(python -c 'import importlib.resources as r; print(r.files("probity_verify") / "samples")')"
+probityai verify "$samples/case.json" --policy "$samples/policy-june.json"
 ```
 
-Add `--verifier "<your command>"` to test your own verifier against the same records.
+```text
+Decision: contradicted
+Reason: selected_span_missing_from_record
+```
 
-Check any verifier of signed AI-agent and supply-chain records against a public corpus. Choose a tool by task.
+<!-- Graded-server sample: one public graded record goes here when the feed opens (operator yes). -->
 
-Explore retained runs or contribute one in the [Open Evidence Lab](https://probityai.github.io/agent-evidence-atlas/lab.html).
-Browse the task catalog in [HTML](https://probityai.github.io/agent-evidence-atlas/start.html) or [Markdown](https://probityai.github.io/agent-evidence-atlas/start.md).
-Read the [agent guide](https://probityai.github.io/agent-evidence-atlas/llms.txt) for commands and pinned sources.
-Use the [replay procedure](https://probityai.github.io/agent-evidence-atlas/replay-tools.html) to run a published example and keep its evidence.
+## Three verbs
 
-## Start here
+| Verb | What it does | Install |
+| --- | --- | --- |
+| `probityai verify` | decide a claim against pinned evidence or a DSSE envelope | `pip install probityai==0.1.0` |
+| `uvx agent-evidence-vectors` | test any verifier against the public conformance corpus | `uvx agent-evidence-vectors==0.26.0` |
+| `ratchet` | turn an observed agent failure into a guard proven by replay | `pip install probity-ratchet==0.2.1` |
 
-- [Agent Evidence](https://github.com/probityai/agent-evidence): the open standard, with conformance vectors, a vocabulary, admission rules and the `dsse` and `jcs-admit` crates.
-- [Probity](https://github.com/probityai/probity): the verifier and the `probity` command.
+Explore retained runs or contribute one in the [Open Evidence Lab](https://probityai.github.io/agent-evidence-atlas/lab.html). Browse the task catalog in [HTML](https://probityai.github.io/agent-evidence-atlas/start.html) or [Markdown](https://probityai.github.io/agent-evidence-atlas/start.md). Read the [agent guide](https://probityai.github.io/agent-evidence-atlas/llms.txt) for commands and pinned sources.
 
 ## Choose a tool
 
@@ -50,20 +48,10 @@ Ratchet turns each observed agent failure into an executable guard.
 It proves the guard by replay against recorded history and fresh held-out runs before admitting it, and signs
 every admission decision with the
 [agent change admission predicate](https://github.com/probityai/agent-evidence/blob/main/packages/vocabulary/docs/predicates/agent-change-admission-v1.md).
-Install it with `pip install probity-ratchet==0.1.2`; its
+Install it with `pip install probity-ratchet==0.2.1`; its
 [README](https://github.com/probityai/probity/blob/e2164379c19cf17a00356dfbdf625a998272ac58/packages/ratchet/README.md)
 gives the commands and the recorded results.
 
-## Current releases
+## The standard
 
-Find release states, source revisions and pinned install commands in the [Atlas project catalog](https://probityai.github.io/agent-evidence-atlas/start.html).
-
-Try a worked task:
-
-- [Issue a local refund with safe retries](https://github.com/probityai/probity/blob/e2164379c19cf17a00356dfbdf625a998272ac58/packages/observer/docs/APS-REFUND-RETRIES.md).
-- [Check published trace records](https://github.com/probityai/agent-evidence/blob/44066a188c1b080b7c9bd5a73f6626c229baaa14/crates/jcs-admit/interop/mintid-trace-records-v2/README.md).
-
-Each project explains its supported commands and examples in its README.
-Verify links to source-pinned installation and checked task recipes. Admission
-includes policy-engine rules and a pre-call budget API and CLI for bounded local workloads.
-Retained runs keep source revisions, readers, operators and rerun instructions with the result.
+Agent Evidence is the open standard; Probity checks and grades against it. [probityai/agent-evidence](https://github.com/probityai/agent-evidence) holds the vocabulary (`agent-evidence-vocabulary==0.7.0`), admission rules (`agent-evidence-admission==0.1.2`), the `dsse` (0.1.5) and `jcs-admit` (0.1.3) crates, and the conformance board. [probityai/probity](https://github.com/probityai/probity) holds the verifier, the observer (`agent-evidence-observer==0.1.1`) and Ratchet.
