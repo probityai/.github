@@ -22,7 +22,7 @@ Reason: selected_span_missing_from_record
 | Verb | What it does | Install |
 | --- | --- | --- |
 | `probityai verify` | decide a claim against pinned evidence or a DSSE envelope | `pip install probityai==0.1.0` |
-| `uvx agent-evidence-vectors` | test any verifier against the public conformance corpus | `uvx agent-evidence-vectors==0.29.2` |
+| `uvx agent-evidence-vectors` | test any verifier against the public conformance corpus | `uvx agent-evidence-vectors==0.30.0` |
 | `ratchet` | turn an observed agent failure into a guard proven by replay | `pip install probity-ratchet==0.2.1` |
 
 Explore retained runs or contribute one in the [Open Evidence Lab](https://probityai.github.io/agent-evidence-atlas/lab.html). Browse the task catalog in [HTML](https://probityai.github.io/agent-evidence-atlas/start.html) or [Markdown](https://probityai.github.io/agent-evidence-atlas/start.md). Read the [agent guide](https://probityai.github.io/agent-evidence-atlas/llms.txt) for commands and pinned sources.
@@ -54,4 +54,4 @@ gives the commands and the recorded results.
 
 ## The standard
 
-Agent Evidence is the open standard; Probity checks and grades against it. [probityai/agent-evidence](https://github.com/probityai/agent-evidence) holds the vocabulary (`agent-evidence-vocabulary==0.8.0`), admission rules (`agent-evidence-admission==0.2.0`), the `dsse` (0.1.5) and `jcs-admit` (0.1.3) crates, and the conformance board. [probityai/probity](https://github.com/probityai/probity) holds the verifier, the observer (`agent-evidence-observer==0.1.1`) and Ratchet.
+Agent Evidence is the open standard; Probity checks and grades against it. [probityai/agent-evidence](https://github.com/probityai/agent-evidence) holds the vocabulary (`agent-evidence-vocabulary==0.8.0`), admission rules (`agent-evidence-admission==0.2.0`), the `dsse` (0.1.6) and `jcs-admit` (0.1.3) crates, and the conformance board. [probityai/probity](https://github.com/probityai/probity) holds the verifier, the observer (`agent-evidence-observer==0.1.1`) and Ratchet.
