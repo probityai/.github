@@ -1,0 +1,26 @@
+name: version-pins
+description: >-
+  Hold every version a repository's pages name to its manifest or to the family
+  lock in version-pins.toml, and compare manifests, tags and registries. The one
+  copy of scripts/version-pins.py lives in this repository; callers pin this
+  action to a commit.
+
+inputs:
+  command:
+    description: "check (offline), registry (network) or badges (network)"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: "3.12"
+    - name: version-pins ${{ inputs.command }}
+      shell: bash
+      env:
+        COMMAND: ${{ inputs.command }}
+        SCRIPT: ${{ github.action_path }}/../../scripts/version-pins.py
+      run: |
+        case "$COMMAND" in check | registry | badges) ;; *) echo "unknown command: $COMMAND" >&2; exit 2 ;; esac
+        python3 -B "$SCRIPT" "$COMMAND"

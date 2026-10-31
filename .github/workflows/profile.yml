@@ -22,8 +22,10 @@ jobs:
       - name: Check navigation controls
         run: python3 -m unittest discover -s tests -v
       - name: Every version the profile names equals the family lock
-        run: |
-          python3 scripts/version-pins.py check
-          python3 scripts/version-pins-test.py
+        uses: ./actions/version-pins
+        with:
+          command: check
+      - name: The version-pins script keeps its contract
+        run: python3 scripts/version-pins-test.py
       - name: Read back public task and discovery links
         run: python3 scripts/check_profile.py
