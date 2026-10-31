@@ -29,7 +29,8 @@ comment `version-pins: keep`, a stretch with `version-pins: off` ... `on`.
 
 Exit 0 when everything agrees, 1 when something disagrees, 2 when the check
 could not run (unreadable config, no git, a registry that did not answer).
-Standard library only, and byte-identical in every repository that runs it.
+Standard library only. This file is the only copy: other repositories run it
+through the probityai/.github/actions/version-pins action, pinned to a commit.
 """
 
 from __future__ import annotations
