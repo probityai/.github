@@ -6,8 +6,8 @@ repository = "probityai/.github"
 
 [family]
 "pypi:probityai" = "0.1.0"
-"pypi:agent-evidence-vectors" = "0.30.0"
-"pypi:probity-ratchet" = "0.2.1"
+"pypi:agent-evidence-vectors" = "0.31.0"
+"pypi:probity-ratchet" = "0.3.0"
 "pypi:agent-evidence-vocabulary" = "0.8.0"
 "pypi:agent-evidence-admission" = "0.2.0"
 "pypi:agent-evidence-observer" = "0.1.1"
