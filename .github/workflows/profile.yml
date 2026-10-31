@@ -27,5 +27,9 @@ jobs:
           command: check
       - name: The version-pins script keeps its contract
         run: python3 scripts/version-pins-test.py
+      - name: A planted stale pin turns the check red here
+        uses: ./actions/version-pins
+        with:
+          command: test
       - name: Read back public task and discovery links
         run: python3 scripts/check_profile.py
