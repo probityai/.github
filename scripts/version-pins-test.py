@@ -11,6 +11,7 @@ Standard library only; run with `python3 scripts/version-pins-test.py`.
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
 import shutil
 import subprocess
@@ -21,7 +22,9 @@ from unittest import mock
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
+# The unit tests exercise the script; ThisRepository exercises the checkout named by
+# VERSION_PINS_ROOT (the caller, when run through the action), else this repository.
+ROOT = Path(os.environ.get("VERSION_PINS_ROOT") or HERE.parent).resolve()
 SPEC = importlib.util.spec_from_file_location("version_pins", HERE / "version-pins.py")
 assert SPEC and SPEC.loader
 vp = importlib.util.module_from_spec(SPEC)
@@ -175,8 +178,7 @@ class ThisRepository(unittest.TestCase):
         self.addCleanup(shutil.rmtree, scratch)
         subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(ROOT), str(scratch / "r")], check=True)
         mutant = scratch / "r"
-        for name in (vp.CONFIG, "scripts/version-pins.py"):
-            shutil.copy2(ROOT / name, mutant / name)
+        shutil.copy2(ROOT / vp.CONFIG, mutant / vp.CONFIG)
         for item in vp.load_config(ROOT).entries:
             if item.manifest:
                 (mutant / item.manifest).parent.mkdir(parents=True, exist_ok=True)
@@ -184,7 +186,7 @@ class ThisRepository(unittest.TestCase):
         (mutant / rel).write_text(text[:start] + stale + text[end:], encoding="utf-8")
         subprocess.run(["git", "-C", str(mutant), "add", "-A"], check=True)
         done = subprocess.run(
-            [sys.executable, str(mutant / "scripts/version-pins.py"), "check", "--root", str(mutant)],
+            [sys.executable, str(HERE / "version-pins.py"), "check", "--root", str(mutant)],
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(done.returncode, 1, f"the check stayed green on {rel}:\n{done.stdout}")

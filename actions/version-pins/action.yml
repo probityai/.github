@@ -7,7 +7,7 @@ description: >-
 
 inputs:
   command:
-    description: "check (offline), registry (network) or badges (network)"
+    description: "check (offline), test (offline, plants a stale pin and requires check to fail), registry (network) or badges (network)"
     required: true
 
 runs:
@@ -20,7 +20,10 @@ runs:
       shell: bash
       env:
         COMMAND: ${{ inputs.command }}
-        SCRIPT: ${{ github.action_path }}/../../scripts/version-pins.py
+        SCRIPTS: ${{ github.action_path }}/../../scripts
       run: |
-        case "$COMMAND" in check | registry | badges) ;; *) echo "unknown command: $COMMAND" >&2; exit 2 ;; esac
-        python3 -B "$SCRIPT" "$COMMAND"
+        case "$COMMAND" in
+          check | registry | badges) python3 -B "$SCRIPTS/version-pins.py" "$COMMAND" ;;
+          test) VERSION_PINS_ROOT="$PWD" python3 -B "$SCRIPTS/version-pins-test.py" ThisRepository ;;
+          *) echo "unknown command: $COMMAND" >&2; exit 2 ;;
+        esac
