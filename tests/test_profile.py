@@ -113,10 +113,10 @@ class ProfileControls(unittest.TestCase):
             self.assertEqual(CHECK.readback_target(url), url)
 
     def test_monorepo_directory_readmes_map_to_raw_bytes(self):
-        nested = f"https://github.com/probityai/agent-evidence/blob/{'b' * 40}/packages/vocabulary/README.md"
+        nested = f"https://github.com/probityai/agent-evidence-vectors/blob/{'b' * 40}/packages/vocabulary/README.md"
         self.assertEqual(
             CHECK.readback_target(nested),
-            f"https://raw.githubusercontent.com/probityai/agent-evidence/{'b' * 40}/packages/vocabulary/README.md",
+            f"https://raw.githubusercontent.com/probityai/agent-evidence-vectors/{'b' * 40}/packages/vocabulary/README.md",
         )
         traversal = nested.replace("packages/vocabulary", "../vocabulary")
         self.assertEqual(CHECK.readback_target(traversal), traversal)
