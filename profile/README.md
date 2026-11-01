@@ -2,6 +2,8 @@
 
 **Check what an AI agent did, from the bytes, before you trust it.**
 
+<p align="center"><picture><source media="(min-width: 1012px)" srcset="https://raw.githubusercontent.com/probityai/probityai.github.io/main/figures/f1-four-verdicts/1/wide-auto.svg"><img src="https://raw.githubusercontent.com/probityai/probityai.github.io/main/figures/f1-four-verdicts/1/narrow-auto.svg" alt="The same sealed archive of three files passes a verifier four times. Intact: verified, exit 0. One byte changed: the seal breaks and the verifier stops it: failed, exit 2. A required file missing: not-established, exit 3. A changed verifier: both the old and the changed verifier say verified, exit 0, and both records are kept."></picture></p>
+
 For platform, security and audit teams who receive a claim about an agent run and need a decision they can replay offline.
 
 ```sh
