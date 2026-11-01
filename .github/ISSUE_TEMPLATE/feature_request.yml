@@ -1,0 +1,17 @@
+name: Feature request
+description: Ask for a capability or a new conformance case.
+title: "feat: "
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you are trying to do
+      description: Describe the task first, then the change you have in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+    validations:
+      required: false

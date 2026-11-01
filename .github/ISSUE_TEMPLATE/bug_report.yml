@@ -1,0 +1,29 @@
+name: Bug report
+description: A tool misbehaves, or a record is judged wrongly.
+title: "bug: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a security problem, do not use this form. Use Security > Report a vulnerability on the repository instead.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The package version or tag you ran.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Command or bytes that reproduce it
+      description: Paste the exact command and, where it applies, the input record.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual result
+    validations:
+      required: true
