@@ -208,6 +208,32 @@ class Grace(unittest.TestCase):
         h = {"0.3.3": self.NOW - vp.timedelta(days=3), "0.3.4": self.NOW - vp.timedelta(hours=25)}
         self.assertIsNone(self.verdict(h))
 
+    def test_settle_hours_widen_the_grace(self):
+        h = {"0.3.3": self.NOW - vp.timedelta(days=3), "0.3.4": self.NOW - vp.timedelta(hours=25)}
+        with mock.patch.object(vp, "release_history", return_value=h):
+            got = vp.lag_in_grace(self.entry(), "0.3.4", now=self.NOW, settle=vp.timedelta(hours=25))
+        self.assertIn("49 h grace", got)
+
+    def test_settled_latest_skips_a_release_younger_than_settle_hours(self):
+        h = {"0.3.3": self.NOW - vp.timedelta(days=3), "0.3.4": self.NOW - vp.timedelta(hours=30),
+             "0.3.5": self.NOW - vp.timedelta(hours=3)}
+        cfg = vp.Config(root=Path("."), repository="probityai/demo", entries=[], include=[], historical=[],
+                        skip=[], registry_pages={}, link_ref="main", settle=vp.timedelta(hours=25))
+        with mock.patch.object(vp, "registry_latest", return_value="0.3.5"), \
+                mock.patch.object(vp, "release_history", return_value=h):
+            self.assertEqual(vp.settled_latest(cfg, self.entry(), now=self.NOW), "0.3.4")
+        cfg.settle = vp.timedelta(0)
+        with mock.patch.object(vp, "registry_latest", return_value="0.3.5"):
+            self.assertEqual(vp.settled_latest(cfg, self.entry(), now=self.NOW), "0.3.5")
+
+    def test_settled_latest_never_moves_a_lock_backwards(self):
+        h = {"0.3.3": self.NOW - vp.timedelta(hours=3)}
+        cfg = vp.Config(root=Path("."), repository="probityai/demo", entries=[], include=[], historical=[],
+                        skip=[], registry_pages={}, link_ref="main", settle=vp.timedelta(hours=25))
+        with mock.patch.object(vp, "registry_latest", return_value="0.3.3"), \
+                mock.patch.object(vp, "release_history", return_value=h):
+            self.assertIsNone(vp.settled_latest(cfg, self.entry(), now=self.NOW))
+
     def test_two_releases_behind_is_not_even_when_both_are_new(self):
         h = {"0.3.3": self.NOW - vp.timedelta(days=3), "0.3.4": self.NOW - vp.timedelta(hours=3),
              "0.3.5": self.NOW - vp.timedelta(hours=1)}
