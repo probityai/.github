@@ -32,6 +32,7 @@ Needs GH_TOKEN with contents, pull-requests and actions write on this repository
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import importlib.util
 import json
@@ -61,13 +62,38 @@ class Failed(Exception):
     """A command this depends on did not succeed; nothing after it may run."""
 
 
-def run(*cmd: str, cwd: Path | None = None, check: bool = True, quiet: bool = False) -> str:
-    done = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+def run(
+    *cmd: str,
+    cwd: Path | None = None,
+    check: bool = True,
+    quiet: bool = False,
+    env: dict[str, str] | None = None,
+) -> str:
+    done = subprocess.run(
+        cmd, cwd=cwd, capture_output=True, text=True, check=False, env=env
+    )
     if not quiet:
         print("$ " + " ".join(cmd), flush=True)
     if check and done.returncode != 0:
         raise Failed(f"{' '.join(cmd)} exited {done.returncode}: {done.stderr.strip() or done.stdout.strip()}")
     return done.stdout
+
+
+def push_env() -> dict[str, str]:
+    """The environment that authenticates a push with GH_TOKEN, kept out of every printed command.
+
+    The checkout's own credential does not survive `brew update-python-resources` in a tap
+    (the push failed with "could not read Username"), so the push names the token itself.
+    """
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+        "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}",
+    }
 
 
 # ---- the local change -------------------------------------------------------------
@@ -164,7 +190,7 @@ def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], t
     run("git", "-c", f"user.name={BOT[0]}", "-c", f"user.email={BOT[1]}", "commit", "-a", "-s", "-q",
         "-m", "chore(pins): move family pins to the newest releases", "-m", "\n".join(notes), cwd=root)
     sha = run("git", "rev-parse", "HEAD", cwd=root, quiet=True).strip()
-    run("git", "push", "origin", f"HEAD:refs/heads/{branch}", cwd=root)
+    run("git", "push", f"https://github.com/{repo}.git", f"HEAD:refs/heads/{branch}", cwd=root, env=push_env())
     body = ("The family released since these pins were set. This moves each lock, the pages it holds"
             " and any formula, and merges when every check is green.\n\n" + "\n".join(f"- {n}" for n in notes))
     if mine:
