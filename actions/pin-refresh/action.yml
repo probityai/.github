@@ -1,0 +1,50 @@
+name: pin-refresh
+description: >-
+  Move a repository's family pins (its version-pins.toml locks, the pages they hold and
+  any Homebrew formula) to the newest releases as a pull request, run the repository's
+  CI on it, and merge it when every run is green. Run it after a family release and on
+  a schedule; scripts/pin-refresh.py in this repository says what it does and why.
+
+inputs:
+  configs:
+    description: "version-pins.toml paths, one per line"
+    required: false
+    default: version-pins.toml
+  ci:
+    description: "workflow files to run on the bump branch before merging, one per line"
+    required: true
+  formulas:
+    description: "true to move Homebrew formulas too (the caller sets up brew first)"
+    required: false
+    default: "false"
+  tap:
+    description: "the tap the formulas belong to, for brew (owner/name)"
+    required: false
+    default: ""
+  token:
+    description: "a token with contents, pull-requests and actions write on this repository"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: "3.12"
+    - name: move the pins, test, merge
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+        CONFIGS: ${{ inputs.configs }}
+        CI: ${{ inputs.ci }}
+        FORMULAS: ${{ inputs.formulas }}
+        TAP: ${{ inputs.tap }}
+        SCRIPTS: ${{ github.action_path }}/../../scripts
+      run: |
+        set -euo pipefail
+        args=()
+        while IFS= read -r c; do [ -n "$c" ] && args+=(--config "$c"); done <<< "$CONFIGS"
+        while IFS= read -r w; do [ -n "$w" ] && args+=(--ci "$w"); done <<< "$CI"
+        if [ "$FORMULAS" = "true" ]; then args+=(--formulas --tap "$TAP"); fi
+        python3 -B "$SCRIPTS/pin-refresh.py" "${args[@]}"
