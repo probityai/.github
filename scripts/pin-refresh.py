@@ -36,6 +36,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -72,6 +73,22 @@ def run(*cmd: str, cwd: Path | None = None, check: bool = True, quiet: bool = Fa
 # ---- the local change -------------------------------------------------------------
 
 
+BREW_DEP = re.compile(r'(?m)^\s*depends_on\s+"([^"]+)"')
+
+
+def brew_provided(formula: Path) -> list[str]:
+    """Python packages the formula takes from brew (depends_on), which must not become resources too."""
+    return sorted({d for d in BREW_DEP.findall(formula.read_text(encoding="utf-8")) if not d.startswith("python")})
+
+
+def update_resources(root: Path, tap: str, name: str) -> None:
+    cmd = ["brew", "update-python-resources", "--ignore-non-pypi-packages"]
+    provided = brew_provided(root / "Formula" / f"{name}.rb")
+    if provided:
+        cmd.append("--exclude-packages=" + ",".join(provided))
+    run(*cmd, f"{tap}/{name}")
+
+
 def bump(root: Path, configs: list[str], formulas_on: bool, tap: str | None) -> tuple[list[str], list[str]]:
     """Apply every move this repository can make; return (what moved, pins that remain)."""
     vp = load_version_pins()
@@ -89,7 +106,7 @@ def bump(root: Path, configs: list[str], formulas_on: bool, tap: str | None) -> 
             if moved and not tap:
                 raise Failed("--formulas moved a formula and no --tap names it for brew")
             for name in moved:
-                run("brew", "update-python-resources", "--ignore-non-pypi-packages", f"{tap}/{name}")
+                update_resources(root, tap, name)
             notes += [f"Formula/{name}.rb: url, sha256 and resources regenerated" for name in moved]
         _, left = vp.write(cfg)
         remaining += [str(f) for f in left]
