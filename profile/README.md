@@ -24,7 +24,7 @@ Reason: selected_span_missing_from_record
 | Verb | What it does | Install |
 | --- | --- | --- |
 | `probityai verify` | decide a claim against pinned evidence or a DSSE envelope | `pip install probityai==0.1.1` |
-| `uvx agent-evidence-vectors` | test any verifier against the public conformance corpus | `uvx agent-evidence-vectors==0.31.2` |
+| `uvx agent-evidence-vectors` | test any verifier against the public conformance corpus | `uvx agent-evidence-vectors==0.32.1` |
 | `ratchet` | turn an observed agent failure into a guard proven by replay | `pip install probity-ratchet==0.3.3` |
 
 Explore retained runs or contribute one in the [Open Evidence Lab](https://probityai.github.io/agent-evidence-atlas/lab.html). Browse the task catalog in [HTML](https://probityai.github.io/agent-evidence-atlas/start.html) or [Markdown](https://probityai.github.io/agent-evidence-atlas/start.md). Read the [agent guide](https://probityai.github.io/agent-evidence-atlas/llms.txt) for commands and pinned sources.
