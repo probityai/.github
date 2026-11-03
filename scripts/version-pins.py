@@ -34,6 +34,10 @@ A family lock may lag its newest release by one release for one day (GRACE):
 that is the window the pin-refresh action has to open and merge the bump. Two
 releases behind, or one release older than a day, is SHORT.
 
+A config that feeds Homebrew sets `[refresh] settle_hours = 25`: brew will not resolve a
+package uploaded within a day, so `refresh` moves a lock only to a release at least that
+old and GRACE grows by the same hours.
+
 A Homebrew formula's sdist url is checked like any pin, but `write` never edits
 it, because the sha256 beside it must move too: `formulas` sets both from the
 registry, and the action regenerates the resource blocks with brew.
@@ -234,6 +238,7 @@ class Config:
     skip: list[str]
     registry_pages: dict[str, str]
     link_ref: str
+    settle: timedelta = timedelta(0)
 
 
 def load_config(root: Path, rel: str = CONFIG) -> Config:
@@ -310,6 +315,7 @@ def load_config(root: Path, rel: str = CONFIG) -> Config:
         skip=list(scan.get("skip", [])),
         registry_pages=dict(data.get("registry_pages", {})),
         link_ref=str(data.get("link_ref", "main")),
+        settle=timedelta(hours=int(data.get("refresh", {}).get("settle_hours", 0))),
     )
 
 
@@ -793,17 +799,18 @@ def release_history(e: Entry) -> dict[str, datetime]:
     raise Unread(f"{e.key} has no release history to read")
 
 
-def lag_in_grace(e: Entry, latest: str, now: datetime | None = None) -> str | None:
-    """Why a family lock that lags `latest` is still inside GRACE, or None when it is not."""
+def lag_in_grace(e: Entry, latest: str, now: datetime | None = None, settle: timedelta = timedelta(0)) -> str | None:
+    """Why a family lock that lags `latest` is still inside GRACE (plus `settle`), or None when it is not."""
+    grace = GRACE + settle
     history = release_history(e)
     newer = sorted((v for v in history if _vkey(v) > _vkey(e.version)), key=_vkey)
     if newer != [latest] or latest not in history:
         return None
     age = (now or datetime.now(UTC)) - history[latest]
-    if age >= GRACE:
+    if age >= grace:
         return None
     hours = age.total_seconds() / 3600
-    return f"{latest} was published {hours:.1f} h ago, inside the {GRACE.total_seconds() / 3600:.0f} h grace"
+    return f"{latest} was published {hours:.1f} h ago, inside the {grace.total_seconds() / 3600:.0f} h grace"
 
 
 def verify_entry(cfg: Config, e: Entry) -> tuple[str, str]:
@@ -843,7 +850,7 @@ def verify_entry(cfg: Config, e: Entry) -> tuple[str, str]:
         if latest is None:
             problems.append(f"{e.key} is pinned here and not published")
         elif latest != e.version:
-            grace = lag_in_grace(e, latest) if _vkey(latest) > _vkey(e.version) else None
+            grace = lag_in_grace(e, latest, settle=cfg.settle) if _vkey(latest) > _vkey(e.version) else None
             if grace:
                 return "GRACE", f"{facts}; the family lock names {e.version}; {grace}"
             problems.append(
@@ -870,15 +877,26 @@ def registry_report(cfg: Config) -> int:
     return 1 if short else 2 if unread else 0
 
 
+def settled_latest(cfg: Config, e: Entry, now: datetime | None = None) -> str | None:
+    """The newest release to move a lock to: the registry's newest, or with [refresh] settle_hours
+    the newest one at least that old (brew refuses to resolve a package uploaded within a day)."""
+    latest = newest_tag(e) if e.registry in TAG_ONLY else registry_latest(e)
+    if not cfg.settle or latest is None:
+        return latest
+    cutoff = (now or datetime.now(UTC)) - cfg.settle
+    ripe = [v for v, when in release_history(e).items() if when <= cutoff and _vkey(v) >= _vkey(e.version)]
+    return max(ripe, key=_vkey) if ripe else None
+
+
 def refresh(cfg: Config, rel: str = CONFIG) -> int:
-    """Move every family lock line to the registry's newest release."""
+    """Move every family lock line to the registry's newest release (settled ones, if configured)."""
     path = cfg.root / rel
     text = path.read_text(encoding="utf-8")
     moved = 0
     for e in cfg.entries:
         if e.own:
             continue
-        latest = newest_tag(e) if e.registry in TAG_ONLY else registry_latest(e)
+        latest = settled_latest(cfg, e)
         if latest is None or latest == e.version:
             continue
         pattern = re.compile(rf'(?m)^("{re.escape(e.key)}"\s*=\s*(?:\{{[^}}\n]*version\s*=\s*)?"){re.escape(e.version)}"')
