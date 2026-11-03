@@ -36,7 +36,7 @@ jobs:
       - name: why
         env:
           REASON: ${{ inputs.reason || github.event.client_payload.release || github.event_name }}
-        run: echo "pin-refresh: $REASON"
+        run: echo "pin-refresh reason $REASON"
       - uses: ./actions/pin-refresh
         with:
           ci: profile.yml
