@@ -25,7 +25,7 @@ Reason: selected_span_missing_from_record
 | --- | --- | --- |
 | `probityai verify` | decide a claim against pinned evidence or a DSSE envelope | `pip install probityai==0.1.1` |
 | `uvx agent-evidence-vectors` | test any verifier against the public conformance corpus | `uvx agent-evidence-vectors==0.32.1` |
-| `ratchet` | turn an observed agent failure into a guard proven by replay | `pip install probity-ratchet==0.3.3` |
+| `ratchet` | turn an observed agent failure into a guard proven by replay | `pip install probity-ratchet==0.3.4` |
 
 Explore retained runs or contribute one in the [Open Evidence Lab](https://probityai.github.io/agent-evidence-atlas/lab.html). Browse the task catalog in [HTML](https://probityai.github.io/agent-evidence-atlas/start.html) or [Markdown](https://probityai.github.io/agent-evidence-atlas/start.md). Read the [agent guide](https://probityai.github.io/agent-evidence-atlas/llms.txt) for commands and pinned sources.
 
@@ -50,7 +50,7 @@ Ratchet turns each observed agent failure into an executable guard.
 It proves the guard by replay against recorded history and fresh held-out runs before admitting it, and signs
 every admission decision with the
 [agent change admission predicate](https://github.com/probityai/agent-evidence-vectors/blob/main/packages/vocabulary/docs/predicates/agent-change-admission-v1.md).
-Install it with `pip install probity-ratchet==0.3.3`; its
+Install it with `pip install probity-ratchet==0.3.4`; its
 [README](https://github.com/probityai/probity/blob/e2164379c19cf17a00356dfbdf625a998272ac58/packages/ratchet/README.md)
 gives the commands and the recorded results.
 

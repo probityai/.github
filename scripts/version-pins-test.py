@@ -145,6 +145,89 @@ class Fixture(unittest.TestCase):
             vp.load_config(root)
 
 
+FORMULA = """class AgentEvidenceVectors < Formula
+  url "https://files.pythonhosted.org/packages/de/ef/abc/agent_evidence_vectors-{v}.tar.gz"
+  sha256 "{sha}"
+
+  resource "rfc8785" do
+    url "https://files.pythonhosted.org/packages/ef/2f/x/rfc8785-0.1.4.tar.gz"
+    sha256 "{other}"
+  end
+end
+"""
+
+
+class Formulas(unittest.TestCase):
+    def setUp(self):
+        text = FORMULA.format(v="0.23.0", sha="1" * 64, other="2" * 64)
+        self.root = git_repo({"version-pins.toml": CONFIG, "pyproject.toml": PYPROJECT,
+                              "Formula/agent-evidence-vectors.rb": text})
+        self.addCleanup(shutil.rmtree, self.root)
+
+    def test_a_stale_formula_url_is_found_and_write_leaves_it(self):
+        cfg = vp.load_config(self.root, "version-pins.toml")
+        cfg.include.append("Formula/*.rb")
+        findings, _ = vp.scan(cfg)
+        self.assertEqual(len(findings), 1)
+        self.assertIsNone(findings[0].replacement)
+        self.assertIn("formulas", findings[0].message)
+        before = (self.root / "Formula/agent-evidence-vectors.rb").read_text()
+        vp.write(cfg)
+        self.assertEqual((self.root / "Formula/agent-evidence-vectors.rb").read_text(), before)
+
+    def test_formulas_moves_url_and_sha_together_and_leaves_resources(self):
+        cfg = vp.load_config(self.root)
+        url = "https://files.pythonhosted.org/packages/aa/bb/new/agent_evidence_vectors-0.30.0.tar.gz"
+        with mock.patch.object(vp, "sdist_of", return_value=(url, "3" * 64)):
+            moved = vp.formulas(cfg, out=open(os.devnull, "w"))
+        self.assertEqual(moved, ["agent-evidence-vectors"])
+        text = (self.root / "Formula/agent-evidence-vectors.rb").read_text()
+        self.assertIn(url, text)
+        self.assertIn("3" * 64, text)
+        self.assertIn("2" * 64, text)  # the resource's sha256 is untouched
+        self.assertIn("rfc8785-0.1.4.tar.gz", text)
+        with mock.patch.object(vp, "sdist_of", side_effect=AssertionError("no fetch when current")):
+            self.assertEqual(vp.formulas(vp.load_config(self.root), out=open(os.devnull, "w")), [])
+
+
+class Grace(unittest.TestCase):
+    NOW = vp.datetime(2026, 11, 3, 12, tzinfo=vp.UTC)
+
+    def entry(self):
+        return vp.Entry(registry="pypi", name="demo", version="0.3.3", source="lock", own=False)
+
+    def verdict(self, history):
+        with mock.patch.object(vp, "release_history", return_value=history):
+            return vp.lag_in_grace(self.entry(), max(history, key=vp._vkey), now=self.NOW)
+
+    def test_one_release_behind_inside_a_day_is_grace(self):
+        h = {"0.3.3": self.NOW - vp.timedelta(days=3), "0.3.4": self.NOW - vp.timedelta(hours=2)}
+        self.assertIn("grace", self.verdict(h))
+
+    def test_one_release_behind_older_than_a_day_is_not(self):
+        h = {"0.3.3": self.NOW - vp.timedelta(days=3), "0.3.4": self.NOW - vp.timedelta(hours=25)}
+        self.assertIsNone(self.verdict(h))
+
+    def test_two_releases_behind_is_not_even_when_both_are_new(self):
+        h = {"0.3.3": self.NOW - vp.timedelta(days=3), "0.3.4": self.NOW - vp.timedelta(hours=3),
+             "0.3.5": self.NOW - vp.timedelta(hours=1)}
+        self.assertIsNone(self.verdict(h))
+
+    def test_registry_report_counts_grace_as_agreeing_and_short_as_red(self):
+        root = git_repo({"version-pins.toml": 'repository = "probityai/demo"\n[family]\n"pypi:demo" = "0.3.3"\n'})
+        self.addCleanup(shutil.rmtree, root)
+        cfg = vp.load_config(root)
+        out = open(os.devnull, "w")
+        with mock.patch.object(vp, "registry_latest", return_value="0.3.4"), \
+                mock.patch.object(vp, "lag_in_grace", return_value="inside the grace"), \
+                mock.patch("sys.stdout", out):
+            self.assertEqual(vp.registry_report(cfg), 0)
+        with mock.patch.object(vp, "registry_latest", return_value="0.3.4"), \
+                mock.patch.object(vp, "lag_in_grace", return_value=None), \
+                mock.patch("sys.stdout", out):
+            self.assertEqual(vp.registry_report(cfg), 1)
+
+
 class ThisRepository(unittest.TestCase):
     """The real pages pass, and a planted stale pin turns the check red."""
 

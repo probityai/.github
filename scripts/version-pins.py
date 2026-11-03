@@ -15,6 +15,7 @@ renders from it) names the version it publishes.
     version-pins.py write      rewrite every disagreeing pin to its owner
     version-pins.py registry   compare manifests, tags and registries (network)
     version-pins.py refresh    move the family lock to the registries, then write
+    version-pins.py formulas   move each Homebrew formula's sdist url and sha256 to its lock (network)
     version-pins.py badges     fetch every image a page shows (network)
 
 What it reads, besides the pins of tracked packages:
@@ -26,6 +27,16 @@ What it reads, besides the pins of tracked packages:
 A page that records history (a changelog, a dated experiment, a paper's tested
 setup) is listed under [scan] historical; one line is exempted with an HTML
 comment `version-pins: keep`, a stretch with `version-pins: off` ... `on`.
+Every rewrite reads these exemptions, so a pin that cites a past release as a
+fact is never moved by `write`, `refresh` or the pin-refresh action.
+
+A family lock may lag its newest release by one release for one day (GRACE):
+that is the window the pin-refresh action has to open and merge the bump. Two
+releases behind, or one release older than a day, is SHORT.
+
+A Homebrew formula's sdist url is checked like any pin, but `write` never edits
+it, because the sha256 beside it must move too: `formulas` sets both from the
+registry, and the action regenerates the resource blocks with brew.
 
 Exit 0 when everything agrees, 1 when something disagrees, 2 when the check
 could not run (unreadable config, no git, a registry that did not answer).
@@ -37,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -45,6 +57,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 CONFIG = "version-pins.toml"
@@ -67,6 +80,8 @@ ON = "version-pins: on"
 # "github" is a project released only as a GitHub release of its tag; "action" is an Action.
 REGISTRIES = ("pypi", "crates", "npm", "action", "github")
 TAG_ONLY = ("action", "github")
+# How long a family lock may name the release before the newest one (see GRACE above).
+GRACE = timedelta(hours=24)
 
 
 class ConfigError(Exception):
@@ -324,6 +339,13 @@ class Rule:
     label: str
     # When a crate and an npm package share a name, the command on the line decides which.
     line_kind: str | None = None
+    # False for a pin that cannot be moved alone (a formula url whose sha256 must move with it).
+    writable: bool = True
+
+
+def sdist_stem(name: str) -> str:
+    """The sdist file stem PyPI gives a project: the normalized name with underscores."""
+    return re.escape(re.sub(r"[-_.]+", "_", name).lower())
 
 
 def pin_rules(entries: list[Entry]) -> list[Rule]:
@@ -340,6 +362,12 @@ def pin_rules(entries: list[Entry]) -> list[Rule]:
                 Rule(e, re.compile(rf"{n}(?:\[[^\]\s]*\])?==({V})(?!\w|\.\d)"), "pin"),
                 Rule(e, re.compile(rf"{n}@({V})(?!\w|\.\d)"), "pin"),  # uvx, uv tool, MCP args
                 Rule(e, re.compile(rf"pypi\.org/project/{q}/({V})(?!\w|\.\d)"), "PyPI link"),
+                Rule(
+                    e,
+                    re.compile(rf"files\.pythonhosted\.org/\S*/{sdist_stem(e.name)}-({V})\.tar\.gz"),
+                    "sdist url",
+                    writable=False,
+                ),
             ]
         if e.registry in ("crates", "npm"):
             siblings = {x.registry for x in names[e.name]} & {"crates", "npm"}
@@ -463,15 +491,16 @@ def scan_text(cfg: Config, rel: str, text: str, rules: list[Rule]) -> list[Findi
             seen.add(span)
             pinned = m.group(1)
             if pinned != rule.entry.version:
+                how = "" if rule.writable else "; `version-pins.py formulas` moves it with its sha256"
                 findings.append(
                     Finding(
                         rel,
                         line,
                         f"{rule.entry.key} {rule.label.split('@')[0]} names {pinned}; "
-                        f"{rule.entry.source} says {rule.entry.version}",
+                        f"{rule.entry.source} says {rule.entry.version}{how}",
                         span[0],
                         span[1],
-                        rule.entry.version,
+                        rule.entry.version if rule.writable else None,
                     )
                 )
     # "0.2.2 on PyPI" in a row or sentence that names the package elsewhere on the line.
@@ -724,6 +753,59 @@ def publisher_of(e: Entry, version: str) -> str | None:
     raise Unread(f"no publisher record is read for {e.registry}")
 
 
+def _when(stamp: str) -> datetime:
+    return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+
+
+def release_history(e: Entry) -> dict[str, datetime]:
+    """Each published version and when it was published; raises Unread when it cannot say."""
+    if e.registry == "pypi":
+        data = fetch_json(f"https://pypi.org/pypi/{e.name}/json")
+        return {
+            v: min(_when(f["upload_time_iso_8601"]) for f in files)
+            for v, files in data["releases"].items()
+            if files and not all(f.get("yanked") for f in files)
+        }
+    if e.registry == "crates":
+        data = fetch_json(f"https://crates.io/api/v1/crates/{e.name}")
+        return {v["num"]: _when(v["created_at"]) for v in data["versions"] if not v.get("yanked")}
+    if e.registry == "npm":
+        data = fetch_json(f"https://registry.npmjs.org/{e.name}")
+        return {v: _when(t) for v, t in data.get("time", {}).items() if VERSION.match(v)}
+    if e.repo:
+        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        headers = {"Accept": "application/vnd.github+json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        found: dict[str, datetime] = {}
+        rx = re.compile(e.tag_regex() + r"\Z")
+        for page in range(1, 6):
+            batch = fetch_json(
+                f"https://api.github.com/repos/{ORG}/{e.repo}/releases?per_page=100&page={page}",
+                headers=headers,
+            )
+            for rel in batch:
+                if (m := rx.match(rel["tag_name"])) and rel.get("published_at"):
+                    found[m.group(1)] = _when(rel["published_at"])
+            if len(batch) < 100:
+                break
+        return found
+    raise Unread(f"{e.key} has no release history to read")
+
+
+def lag_in_grace(e: Entry, latest: str, now: datetime | None = None) -> str | None:
+    """Why a family lock that lags `latest` is still inside GRACE, or None when it is not."""
+    history = release_history(e)
+    newer = sorted((v for v in history if _vkey(v) > _vkey(e.version)), key=_vkey)
+    if newer != [latest] or latest not in history:
+        return None
+    age = (now or datetime.now(UTC)) - history[latest]
+    if age >= GRACE:
+        return None
+    hours = age.total_seconds() / 3600
+    return f"{latest} was published {hours:.1f} h ago, inside the {GRACE.total_seconds() / 3600:.0f} h grace"
+
+
 def verify_entry(cfg: Config, e: Entry) -> tuple[str, str]:
     """('OK'|'SHORT', explanation) for one entry; raises Unread when it cannot say."""
     repo = cfg.repository.split("/", 1)[1]
@@ -761,15 +843,18 @@ def verify_entry(cfg: Config, e: Entry) -> tuple[str, str]:
         if latest is None:
             problems.append(f"{e.key} is pinned here and not published")
         elif latest != e.version:
+            grace = lag_in_grace(e, latest) if _vkey(latest) > _vkey(e.version) else None
+            if grace:
+                return "GRACE", f"{facts}; the family lock names {e.version}; {grace}"
             problems.append(
                 f"the family lock names {e.version} and the newest release is {latest}; "
-                "run python3 scripts/version-pins.py refresh"
+                "the pin-refresh workflow moves it, or run python3 scripts/version-pins.py refresh"
             )
     return ("SHORT" if problems else "OK", facts + ("; " + "; ".join(problems) if problems else ""))
 
 
 def registry_report(cfg: Config) -> int:
-    ok = short = unread = 0
+    ok = short = unread = grace = 0
     for e in cfg.entries:
         try:
             verdict, note = verify_entry(cfg, e)
@@ -777,10 +862,11 @@ def registry_report(cfg: Config) -> int:
             verdict, note = "UNREAD", str(exc)
         print(f"{verdict:6} {e.key:40} {note}")
         ok += verdict == "OK"
+        grace += verdict == "GRACE"
         short += verdict == "SHORT"
         unread += verdict == "UNREAD"
     total = len(cfg.entries)
-    print(f"registry: {ok} of {total} agree; {short} short; {unread} could not be read")
+    print(f"registry: {ok} of {total} agree; {grace} inside the grace; {short} short; {unread} could not be read")
     return 1 if short else 2 if unread else 0
 
 
@@ -802,6 +888,50 @@ def refresh(cfg: Config, rel: str = CONFIG) -> int:
         print(f"family {e.key}: {e.version} -> {latest}")
         moved += 1
     path.write_text(text, encoding="utf-8")
+    return moved
+
+
+FORMULA_URL = re.compile(r'(?m)^(\s*url\s+")(https://files\.pythonhosted\.org/\S+?/([A-Za-z0-9_.]+)-(' + V + r')\.tar\.gz)(")')
+FORMULA_SHA = re.compile(r'(?m)^(\s*sha256\s+")([0-9a-f]{64})(")')
+
+
+def sdist_of(name: str, version: str) -> tuple[str, str]:
+    """(url, sha256) of the sdist PyPI holds for name==version."""
+    data = fetch_json(f"https://pypi.org/pypi/{name}/{version}/json")
+    for item in data["urls"]:
+        if item["packagetype"] == "sdist":
+            return item["url"], item["digests"]["sha256"]
+    raise Unread(f"{name} {version} has no sdist on PyPI")
+
+
+def formulas(cfg: Config, out=sys.stdout) -> list[str]:
+    """Move every formula's top-level url and sha256 to its lock; return the formulas moved.
+
+    Only the formula's own url and the sha256 right after it are touched; resource blocks
+    (its dependencies) are regenerated by `brew update-python-resources` afterwards.
+    """
+    by_stem = {re.sub(r"[-_.]+", "_", e.name).lower(): e for e in cfg.entries if e.registry == "pypi"}
+    moved: list[str] = []
+    for rel in tracked_files(cfg.root):
+        if not (rel.startswith("Formula/") and rel.endswith(".rb")):
+            continue
+        path = cfg.root / rel
+        text = path.read_text(encoding="utf-8")
+        m = FORMULA_URL.search(text)
+        if not m:
+            continue
+        entry = by_stem.get(m.group(3).lower())
+        if entry is None or m.group(4) == entry.version:
+            continue
+        url, sha = sdist_of(entry.name, entry.version)
+        sha_m = FORMULA_SHA.search(text, m.end())
+        if sha_m is None:
+            raise ConfigError(f"{rel}: no sha256 line after the url")
+        text = text[: sha_m.start(2)] + sha + text[sha_m.end(2) :]
+        text = text[: m.start(2)] + url + text[m.end(2) :]
+        path.write_text(text, encoding="utf-8")
+        print(f"formula {rel}: {entry.name} {m.group(4)} -> {entry.version}", file=out)
+        moved.append(Path(rel).stem)
     return moved
 
 
@@ -842,7 +972,7 @@ def badge_report(cfg: Config) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument("mode", nargs="?", default="check",
-                        choices=("check", "write", "registry", "refresh", "badges"))
+                        choices=("check", "write", "registry", "refresh", "formulas", "badges"))
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--config", default=CONFIG)
     args = parser.parse_args(argv)
@@ -852,6 +982,10 @@ def main(argv: list[str] | None = None) -> int:
             return registry_report(cfg)
         if args.mode == "badges":
             return badge_report(cfg)
+        if args.mode == "formulas":
+            moved = formulas(cfg)
+            print(f"version-pins: moved {len(moved)} formulas{': ' + ' '.join(moved) if moved else ''}")
+            return 0
         if args.mode == "refresh":
             refresh(cfg, args.config)
             cfg = load_config(args.root, args.config)
