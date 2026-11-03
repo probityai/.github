@@ -121,5 +121,24 @@ class LocalBump(unittest.TestCase):
                 pr.bump(self.root, ["version-pins.toml"], True, None)
 
 
+class BrewResources(unittest.TestCase):
+    def test_a_package_brew_provides_is_excluded_from_the_resources(self):
+        root = repo({"Formula/demo.rb": 'class Demo < Formula\n  depends_on "cryptography"\n  depends_on "python@3.14"\nend\n'})
+        self.addCleanup(shutil.rmtree, root)
+        self.assertEqual(pr.brew_provided(root / "Formula/demo.rb"), ["cryptography"])
+        with mock.patch.object(pr, "run") as run:
+            pr.update_resources(root, "probityai/tap", "demo")
+        run.assert_called_once_with("brew", "update-python-resources", "--ignore-non-pypi-packages",
+                                    "--exclude-packages=cryptography", "probityai/tap/demo")
+
+    def test_no_exclusion_when_brew_provides_no_python_package(self):
+        root = repo({"Formula/demo.rb": 'class Demo < Formula\n  depends_on "python@3.14"\nend\n'})
+        self.addCleanup(shutil.rmtree, root)
+        with mock.patch.object(pr, "run") as run:
+            pr.update_resources(root, "probityai/tap", "demo")
+        run.assert_called_once_with("brew", "update-python-resources", "--ignore-non-pypi-packages",
+                                    "probityai/tap/demo")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
