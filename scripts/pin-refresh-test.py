@@ -8,12 +8,14 @@ Standard library only; run with `python3 scripts/pin-refresh-test.py`.
 
 from __future__ import annotations
 
+import http.server
 import importlib.util
 import io
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -119,6 +121,40 @@ class LocalBump(unittest.TestCase):
         with mock.patch.object(vp, "formulas", return_value=["probity-verify"]):
             with self.assertRaises(pr.Failed):
                 pr.bump(self.root, ["version-pins.toml"], True, None)
+
+
+class PushAuth(unittest.TestCase):
+    """The push carries exactly one Authorization header, whatever the checkout persisted."""
+
+    def test_a_persisted_checkout_header_is_cleared(self):
+        seen: list[list[str]] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append(self.headers.get_all("Authorization") or [])
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = f"http://127.0.0.1:{server.server_port}/"
+        root = repo({"a": "a\n"})
+        self.addCleanup(shutil.rmtree, root)
+        key = f"http.{base}.extraheader"
+        subprocess.run(["git", "-C", str(root), "config", key, "AUTHORIZATION: basic b2xk"], check=True)
+        with mock.patch.dict("os.environ", {"GH_TOKEN": "new"}):
+            env = pr.push_env()
+        env["GIT_CONFIG_KEY_0"] = env["GIT_CONFIG_KEY_1"] = key
+        subprocess.run(["git", "-C", str(root), "ls-remote", base + "x.git"], env=env,
+                       capture_output=True, check=False)
+        self.assertEqual(len(seen), 1, seen)
+        self.assertEqual(len(seen[0]), 1, f"the request carried {seen[0]}")
+        self.assertIn("eC1hY2Nlc3MtdG9rZW46bmV3", seen[0][0])  # x-access-token:new
 
 
 class BrewResources(unittest.TestCase):

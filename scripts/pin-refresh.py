@@ -84,15 +84,20 @@ def push_env() -> dict[str, str]:
 
     The checkout's own credential does not survive `brew update-python-resources` in a tap
     (the push failed with "could not read Username"), so the push names the token itself.
+    An empty first value clears any header the checkout persisted: a second Authorization
+    header makes GitHub refuse the push with HTTP 400 ("Duplicate header"), whichever
+    workflow checked the repository out.
     """
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
     basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
     return {
         **os.environ,
         "GIT_TERMINAL_PROMPT": "0",
-        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_COUNT": "2",
         "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
-        "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}",
+        "GIT_CONFIG_VALUE_0": "",
+        "GIT_CONFIG_KEY_1": "http.https://github.com/.extraheader",
+        "GIT_CONFIG_VALUE_1": f"AUTHORIZATION: basic {basic}",
     }
 
 
