@@ -352,7 +352,7 @@ def _name(name: str) -> str:
 
 
 # The cell text a table row uses to name the registry a package is published to.
-TABLE_REGISTRY = {"pypi": r"PyPI", "crates": r"crates\.io", "npm": r"npm"}
+TABLE_REGISTRY = {"pypi": r"PyPI", "crates": r"crates\.io", "npm": r"npm", "github": r"GitHub"}
 NPM_WORDS = re.compile(r"\b(?:npm|npx|pnpm|yarn|bun)\b")
 
 

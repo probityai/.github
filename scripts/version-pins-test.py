@@ -254,6 +254,15 @@ class TableVersions(unittest.TestCase):
         self.assertIn("| crates.io | **3.0.0** |", text)
         self.assertIn("| npm | **4.0.0** |", text)
 
+    def test_a_package_released_only_on_github_is_held_to_its_owner(self):
+        cfg = TABLE_CONFIG + '[[own]]\nkey = "github:kit"\nmanifest = "kit/pyproject.toml"\ntag = "kit-v{version}"\n'
+        root = git_repo({**TABLE_FILES, "version-pins.toml": cfg,
+                         "kit/pyproject.toml": '[project]\nname = "kit"\nversion = "0.1.0"\n',
+                         "README.md": TABLE_HEAD + "| [kit](kit/README.md) | replays a record | **0.0.9** | not on PyPI |\n"})
+        self.addCleanup(shutil.rmtree, root)
+        findings, _ = vp.scan(vp.load_config(root))
+        self.assertEqual([f.message.split()[0] for f in findings], ["github:kit"], findings)
+
     def test_the_keep_marker_exempts_a_row(self):
         _, _, found = self.scan("| [demo](x.md) | a tool | **1.0.0** | - | <!-- version-pins: keep -->\n")
         self.assertEqual(found, [])
