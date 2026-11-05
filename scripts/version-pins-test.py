@@ -145,6 +145,97 @@ class Fixture(unittest.TestCase):
             vp.load_config(root)
 
 
+TABLE_CONFIG = """
+repository = "probityai/demo"
+[[own]]
+key = "pypi:demo"
+manifest = "pyproject.toml"
+[[own]]
+key = "pypi:demo-cases"
+manifest = "cases/pyproject.toml"
+[family]
+"pypi:other" = "0.9.0"
+"pypi:shared" = "2.0.0"
+"crates:shared" = "3.0.0"
+"npm:shared" = "4.0.0"
+"""
+TABLE_FILES = {
+    "version-pins.toml": TABLE_CONFIG,
+    "pyproject.toml": PYPROJECT,
+    "cases/pyproject.toml": '[project]\nname = "demo-cases"\nversion = "0.5.0"\n',
+}
+TABLE_HEAD = "| package | what it is | version | downloads |\n| --- | --- | :---: | :---: |\n"
+
+
+class TableVersions(unittest.TestCase):
+    """A bold version in a package's table row is a pin: found, rewritten, and kept bold."""
+
+    def scan(self, rows: str):
+        root = git_repo({**TABLE_FILES, "README.md": TABLE_HEAD + rows})
+        self.addCleanup(shutil.rmtree, root)
+        cfg = vp.load_config(root)
+        findings, _ = vp.scan(cfg)
+        return root, cfg, findings
+
+    def test_a_stale_bold_version_is_found_and_write_keeps_the_bold(self):
+        root, cfg, found = self.scan("| [demo](packages/demo/README.md) | a tool | **1.2.0** | - |\n")
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("table version names 1.2.0", found[0].message)
+        changed, remaining = vp.write(cfg)
+        self.assertEqual((changed, remaining), (1, []))
+        self.assertIn("| **1.2.3** | - |", (root / "README.md").read_text())
+        self.assertEqual(vp.scan(vp.load_config(root))[0], [])
+
+    def test_a_current_bold_version_passes(self):
+        _, _, found = self.scan("| [demo](packages/demo/README.md) | a tool | **1.2.3** | - |\n")
+        self.assertEqual(found, [])
+
+    def test_a_package_named_in_another_column_does_not_claim_the_row(self):
+        _, _, found = self.scan("| [other](x.md) | works with demo and demo-cases | **0.9.0** | - |\n")
+        self.assertEqual(found, [])
+        _, _, found = self.scan("| [other](x.md) | works with demo | **1.2.3** | - |\n")
+        self.assertEqual([f.message.split()[0] for f in found], ["pypi:other"], found)
+
+    def test_a_name_that_prefixes_another_follows_its_own_owner(self):
+        _, cfg, found = self.scan(
+            "| [demo](packages/demo/README.md) | a tool | **1.0.0** | - |\n"
+            "| [demo-cases](packages/demo-cases/README.md) | its cases | **0.4.0** | - |\n"
+        )
+        self.assertEqual(
+            sorted(f.message.split()[0] for f in found), ["pypi:demo", "pypi:demo-cases"], found
+        )
+        vp.write(cfg)
+        text = (cfg.root / "README.md").read_text()
+        self.assertIn("| a tool | **1.2.3** |", text)
+        self.assertIn("| its cases | **0.5.0** |", text)
+
+    def test_one_name_on_three_registries_reads_the_registry_cell(self):
+        _, cfg, found = self.scan(
+            "| package | registry | version |\n| --- | --- | --- |\n"
+            "| [shared](a.md) | PyPI | **1.0.0** |\n"
+            "| shared | crates.io | **1.0.0** |\n"
+            "| shared | npm | **1.0.0** |\n"
+        )
+        self.assertEqual(
+            sorted(f.message.split()[0] for f in found),
+            ["crates:shared", "npm:shared", "pypi:shared"],
+            found,
+        )
+        vp.write(cfg)
+        text = (cfg.root / "README.md").read_text()
+        self.assertIn("| PyPI | **2.0.0** |", text)
+        self.assertIn("| crates.io | **3.0.0** |", text)
+        self.assertIn("| npm | **4.0.0** |", text)
+
+    def test_the_keep_marker_exempts_a_row(self):
+        _, _, found = self.scan("| [demo](x.md) | a tool | **1.0.0** | - | <!-- version-pins: keep -->\n")
+        self.assertEqual(found, [])
+
+    def test_a_bold_number_that_is_not_a_version_cell_is_ignored(self):
+        _, _, found = self.scan("| [demo](x.md) | **1.0.0** is old | 1.2.3 | - |\n")
+        self.assertEqual(found, [])
+
+
 FORMULA = """class AgentEvidenceVectors < Formula
   url "https://files.pythonhosted.org/packages/de/ef/abc/agent_evidence_vectors-{v}.tar.gz"
   sha256 "{sha}"
