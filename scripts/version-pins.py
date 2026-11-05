@@ -20,6 +20,7 @@ renders from it) names the version it publishes.
 
 What it reads, besides the pins of tracked packages:
 
+* a bold version in a table row whose first cell names the package (`| [name](...) | ... | **0.4.1** |`);
 * a markdown link whose text names one version and whose target names another;
 * a link into this repository that names a file the tree does not hold;
 * a relative link on a page a registry renders (it 404s on PyPI and crates.io).
@@ -335,6 +336,8 @@ def _name(name: str) -> str:
     return r"(?<![\w./-])" + re.escape(name) + r"(?![\w-])"
 
 
+# The cell text a table row uses to name the registry a package is published to.
+TABLE_REGISTRY = {"pypi": r"PyPI", "crates": r"crates\.io", "npm": r"npm"}
 NPM_WORDS = re.compile(r"\b(?:npm|npx|pnpm|yarn|bun)\b")
 
 
@@ -426,6 +429,25 @@ def pin_rules(entries: list[Entry]) -> list[Rule]:
             Rule(e, re.compile(rf"{n}\s*\(\s*v?({V})\s*\)"), "stated version"),
             Rule(e, re.compile(rf"({V}) on (?:PyPI|crates\.io|npm) \(`{q}`\)"), "stated version"),
         ]
+        # A table row whose first cell names the package and whose version cell is bold plain
+        # text, `| [name](...) | what it is | **0.4.1** | ... |`. Only the first cell names the
+        # package, so a package mentioned in the "what it is" cell never claims a row. When
+        # one name is published to several registries, the row must also say which one.
+        word = TABLE_REGISTRY.get(e.registry)
+        if word:
+            shared = {x.registry for x in names[e.name]} & set(TABLE_REGISTRY)
+            only = (
+                rf"(?=\|[^|\n]*(?:\|[^|\n]*)*?\|[ \t]*(?i:{word})\b)" if len(shared) > 1 else ""
+            )
+            rules.append(
+                Rule(
+                    e,
+                    re.compile(
+                        rf"(?m)^{only}\|[^|\n]*{n}[^|\n]*\|(?:[^|\n]*\|)*?[ \t]*\*\*({V})\*\*[ \t]*\|"
+                    ),
+                    "table version",
+                )
+            )
         for page in e.pages:
             rules.append(
                 Rule(
