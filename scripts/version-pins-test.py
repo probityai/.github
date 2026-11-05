@@ -145,6 +145,33 @@ class Fixture(unittest.TestCase):
             vp.load_config(root)
 
 
+class ManifestVersions(unittest.TestCase):
+    """A manifest names its version directly, or through hatch's dynamic version file."""
+
+    def read(self, pyproject: str, files: dict[str, str] | None = None) -> str:
+        root = git_repo({"pkg/pyproject.toml": pyproject, **(files or {})})
+        self.addCleanup(shutil.rmtree, root)
+        return vp.read_manifest(root, "pkg/pyproject.toml")
+
+    def test_a_static_version_is_read(self):
+        self.assertEqual(self.read('[project]\nname = "a"\nversion = "1.2.3"\n'), "1.2.3")
+
+    def test_a_hatch_dynamic_version_is_read_from_its_file(self):
+        text = '[project]\nname = "a"\ndynamic = ["version"]\n[tool.hatch.version]\npath = "src/a/__init__.py"\n'
+        self.assertEqual(
+            self.read(text, {"pkg/src/a/__init__.py": '"""doc"""\n__version__ = "0.2.0"\n'}), "0.2.0"
+        )
+
+    def test_a_dynamic_version_with_no_readable_source_is_a_config_error(self):
+        text = '[project]\nname = "a"\ndynamic = ["version"]\n[tool.hatch.version]\npath = "src/a/__init__.py"\n'
+        with self.assertRaises(vp.ConfigError):
+            self.read(text, {"pkg/src/a/__init__.py": "x = 1\n"})
+        with self.assertRaises(vp.ConfigError):
+            self.read(text)  # the named file is missing
+        with self.assertRaises(vp.ConfigError):
+            self.read('[project]\nname = "a"\ndynamic = ["version"]\n')
+
+
 TABLE_CONFIG = """
 repository = "probityai/demo"
 [[own]]

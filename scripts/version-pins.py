@@ -163,6 +163,21 @@ def matches(path: str, patterns: list[str] | tuple[str, ...]) -> bool:
     return any(_glob_regex(p).match(path) for p in patterns)
 
 
+def _pyproject_version(root: Path, rel: str, data: dict) -> str:
+    """`project.version`, or, for a hatch dynamic version, the `__version__` in the file it names."""
+    project = data["project"]
+    if "version" in project:
+        return project["version"]
+    path = data.get("tool", {}).get("hatch", {}).get("version", {}).get("path")
+    if "version" not in project.get("dynamic", []) or not path:
+        raise KeyError("version")
+    source = (root / rel).parent / path
+    found = re.search(rf"(?m)^__version__\s*=\s*[\"']({V})[\"']", source.read_text(encoding="utf-8"))
+    if found is None:
+        raise KeyError(f"__version__ in {path}")
+    return found.group(1)
+
+
 def read_manifest(root: Path, rel: str) -> str:
     """The version a manifest declares; the file kind decides where to look."""
     path = root / rel
@@ -173,7 +188,7 @@ def read_manifest(root: Path, rel: str) -> str:
     name = path.name
     try:
         if name == "pyproject.toml":
-            version = tomllib.loads(text)["project"]["version"]
+            version = _pyproject_version(root, rel, tomllib.loads(text))
         elif name == "Cargo.toml":
             data = tomllib.loads(text)
             version = data["package"]["version"]
@@ -190,7 +205,7 @@ def read_manifest(root: Path, rel: str) -> str:
             version = found.group(1)
         else:
             version = text.strip()
-    except (KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as exc:
+    except (KeyError, TypeError, ValueError, OSError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"{rel} declares no readable version ({exc})") from exc
     if not VERSION.match(str(version)):
         raise ConfigError(f"{rel} declares {version!r}, which is not a release version")
