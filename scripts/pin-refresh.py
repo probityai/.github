@@ -27,6 +27,15 @@ called it turns red.
 Exit 0 when nothing lags or the bump merged; 1 when a check failed or a pin remains
 that nothing here can move; 2 when it could not run (a registry, git or gh failed).
 Needs GH_TOKEN with contents, pull-requests and actions write on this repository.
+
+WHY THE PULL REQUEST NEEDS ITS OWN TOKEN. GitHub starts no pull_request run for a push or
+a pull request made with the Actions GITHUB_TOKEN, so the required check never appears on
+such a pull request: the dispatched CI run passes, and the merge is still refused ("the
+base branch policy prohibits the merge"; probityai/.github#31 and probity#256 sat with no
+check for hours). With PIN_REFRESH_PR_TOKEN set (a GitHub App or fine-grained token with
+contents and pull-requests write), the push, the pull request and the merge use it, its
+pull_request run is waited for, and the merge goes through. Without it, a refused merge
+exits 1 and names the missing secret instead of reporting that the script could not run.
 """
 
 from __future__ import annotations
@@ -79,6 +88,16 @@ def run(
     return done.stdout
 
 
+def pr_token() -> str:
+    """The token that opens and merges the pull request: one that starts pull_request runs."""
+    return os.environ.get("PIN_REFRESH_PR_TOKEN", "")
+
+
+def pr_env() -> dict[str, str] | None:
+    token = pr_token()
+    return {**os.environ, "GH_TOKEN": token, "GITHUB_TOKEN": token} if token else None
+
+
 def push_env() -> dict[str, str]:
     """The environment that authenticates a push with GH_TOKEN, kept out of every printed command.
 
@@ -88,7 +107,7 @@ def push_env() -> dict[str, str]:
     header makes GitHub refuse the push with HTTP 400 ("Duplicate header"), whichever
     workflow checked the repository out.
     """
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
+    token = pr_token() or os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
     basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
     return {
         **os.environ,
@@ -187,6 +206,20 @@ def dispatch_and_wait(repo: str, workflow: str, branch: str, sha: str, timeout_s
     return "timed_out", f"{workflow} on {branch} (run {run_id or 'never started'})"
 
 
+def wait_pr_checks(repo: str, number: int, sha: str, timeout_s: int) -> tuple[str, str]:
+    """Wait for the checks the pull request itself started; return (conclusion, detail)."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        view = gh_json("pr", "view", str(number), "-R", repo, "--json", "headRefOid,statusCheckRollup")
+        rollup = view["statusCheckRollup"] or []
+        if view["headRefOid"] == sha and rollup and all(c.get("status", "COMPLETED") == "COMPLETED" for c in rollup):
+            bad = [c.get("name") or c.get("context") for c in rollup
+                   if (c.get("conclusion") or c.get("state")) not in ("SUCCESS", "SKIPPED", "NEUTRAL")]
+            return ("success", "") if not bad else ("failure", ", ".join(map(str, bad)))
+        time.sleep(20)
+    return "timed_out", "no completed pull_request checks"
+
+
 def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], timeout_s: int) -> int:
     branch = branch_for(root)
     existing = open_pin_prs(repo)
@@ -202,7 +235,8 @@ def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], t
         number = mine[0]["number"]
     else:
         url = run("gh", "pr", "create", "-R", repo, "--base", base, "--head", branch,
-                  "--title", "chore(pins): move family pins to the newest releases", "--body", body).strip()
+                  "--title", "chore(pins): move family pins to the newest releases", "--body", body,
+                  env=pr_env()).strip()
         number = int(url.rstrip("/").rsplit("/", 1)[1])
     for old in existing:
         if old["headRefName"] != branch:
@@ -212,13 +246,26 @@ def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], t
     for wf, conclusion, url in results:
         print(f"CI {wf}: {conclusion} {url}", flush=True)
     failed = [(wf, c, u) for wf, c, u in results if c != "success"]
+    if not failed and pr_token():
+        conclusion, detail = wait_pr_checks(repo, number, sha, timeout_s)
+        print(f"PR checks: {conclusion} {detail}", flush=True)
+        if conclusion != "success":
+            failed = [("pull_request checks", conclusion, detail)]
     if failed:
         lines = "\n".join(f"- {wf}: {c} ({u})" for wf, c, u in failed)
         run("gh", "pr", "comment", str(number), "-R", repo, "--body",
             f"Not merged: these checks did not pass on {sha[:12]}.\n\n{lines}", check=False)
         return 1
-    run("gh", "pr", "merge", str(number), "-R", repo, "--squash", "--delete-branch",
-        "--match-head-commit", sha)
+    try:
+        run("gh", "pr", "merge", str(number), "-R", repo, "--squash", "--delete-branch",
+            "--match-head-commit", sha, env=pr_env())
+    except Failed as exc:
+        if pr_token() or "policy prohibits" not in str(exc):
+            raise
+        print(f"pin-refresh: #{number} passed its dispatched CI but the required check never reached the "
+              "pull request: set PIN_REFRESH_PR_TOKEN (pin-refresh input pr-token) to a token that starts "
+              "pull_request runs; close and reopen the pull request by hand to run its checks", flush=True)
+        return 1
     print(f"MERGED #{number} at {sha}", flush=True)
     return 0
 
