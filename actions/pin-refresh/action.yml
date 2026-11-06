@@ -24,6 +24,12 @@ inputs:
   token:
     description: "a token with contents, pull-requests and actions write on this repository"
     required: true
+  pr-token:
+    description: >-
+      a GitHub App or fine-grained token that opens and merges the pull request, so GitHub
+      starts its pull_request checks (the Actions token never does); empty keeps `token`
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -36,6 +42,7 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.token }}
         GITHUB_TOKEN: ${{ inputs.token }}
+        PIN_REFRESH_PR_TOKEN: ${{ inputs.pr-token }}
         CONFIGS: ${{ inputs.configs }}
         CI: ${{ inputs.ci }}
         FORMULAS: ${{ inputs.formulas }}
