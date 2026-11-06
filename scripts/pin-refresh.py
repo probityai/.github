@@ -220,6 +220,23 @@ def wait_pr_checks(repo: str, number: int, sha: str, timeout_s: int) -> tuple[st
     return "timed_out", "no completed pull_request checks"
 
 
+def reuse_pushed_branch(repo: str, root: Path, branch: str, sha: str) -> str:
+    """The branch is named after the diff, so one that already exists holds this very bump.
+
+    A new commit of the same tree has another sha (the commit time differs), and pushing it
+    over the old one is refused as a non-fast-forward: an hourly run that finds the earlier
+    pull request still open failed here, every hour. Stand on the pushed commit instead.
+    """
+    url = f"https://github.com/{repo}.git"
+    if not run("git", "ls-remote", "--heads", url, branch, cwd=root, quiet=True, env=push_env()).strip():
+        return sha
+    run("git", "fetch", "-q", url, branch, cwd=root, quiet=True, env=push_env())
+    if run("git", "diff", "--stat", "FETCH_HEAD", "HEAD", cwd=root, quiet=True).strip():
+        return sha
+    run("git", "reset", "-q", "--hard", "FETCH_HEAD", cwd=root, quiet=True)
+    return run("git", "rev-parse", "HEAD", cwd=root, quiet=True).strip()
+
+
 def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], timeout_s: int) -> int:
     branch = branch_for(root)
     existing = open_pin_prs(repo)
@@ -228,6 +245,7 @@ def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], t
     run("git", "-c", f"user.name={BOT[0]}", "-c", f"user.email={BOT[1]}", "commit", "-a", "-s", "-q",
         "-m", "chore(pins): move family pins to the newest releases", "-m", "\n".join(notes), cwd=root)
     sha = run("git", "rev-parse", "HEAD", cwd=root, quiet=True).strip()
+    sha = reuse_pushed_branch(repo, root, branch, sha)
     run("git", "push", f"https://github.com/{repo}.git", f"HEAD:refs/heads/{branch}", cwd=root, env=push_env())
     body = ("The family released since these pins were set. This moves each lock, the pages it holds"
             " and any formula, and merges when every check is green.\n\n" + "\n".join(f"- {n}" for n in notes))
