@@ -4,12 +4,19 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
   schedule:
     - cron: "31 6 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  # A newer push to the same pull request supersedes the older run; merge-queue
+  # batches and pushes to main always finish.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   profile:
@@ -35,3 +42,23 @@ jobs:
           command: test
       - name: Read back public task and discovery links
         run: python3 scripts/check_profile.py
+
+  # The one status the main ruleset requires. It runs even when a job fails or
+  # is skipped, and passes only when every job it needs passed or was skipped
+  # by path selection.
+  ci-ok:
+    if: always()
+    needs: [profile]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every selected job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "a required job ended $r"; exit 1 ;;
+            esac
+          done
