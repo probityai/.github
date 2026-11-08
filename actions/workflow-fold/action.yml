@@ -1,0 +1,22 @@
+name: workflow-fold
+description: >-
+  Hold a repository to the one-workflow rule: exactly one workflow runs on pull_request, it is
+  tested by the merge queue, supersedes in-flight runs, and ends in an always() ci-ok job that
+  needs every other job. A new single-job pull-request workflow fails the check and is named.
+  The one copy of scripts/fold-workflows.py lives in this repository; callers pin this action to a
+  commit and run it from their own ci workflow.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: "3.12"
+    - name: Install the YAML reader
+      shell: bash
+      run: python3 -m pip install --disable-pip-version-check --quiet pyyaml==6.0.3
+    - name: fold-workflows --check
+      shell: bash
+      env:
+        TOOL: ${{ github.action_path }}/../../scripts/fold-workflows.py
+      run: python3 -B "$TOOL" --root "$PWD" --check
