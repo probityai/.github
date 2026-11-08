@@ -176,5 +176,34 @@ class BrewResources(unittest.TestCase):
                                     "probityai/tap/demo")
 
 
+class MergeTest(unittest.TestCase):
+    def test_merge_queue_refusal_retries_without_delete_branch(self):
+        calls = []
+
+        def fake_run(*args, **kw):
+            calls.append(args)
+            if "--delete-branch" in args:
+                raise pr.Failed("X Cannot use `-d` or `--delete-branch` when merge queue enabled")
+            return ""
+
+        with mock.patch.object(pr, "run", fake_run):
+            self.assertTrue(pr.merge_pr("o/r", 7, "abc"))
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("--delete-branch", calls[1])
+        self.assertIn("--match-head-commit", calls[1])
+
+    def test_direct_merge_reports_merged(self):
+        with mock.patch.object(pr, "run", return_value=""):
+            self.assertFalse(pr.merge_pr("o/r", 7, "abc"))
+
+    def test_other_merge_failures_still_raise(self):
+        def fake_run(*args, **kw):
+            raise pr.Failed("policy prohibits the merge")
+
+        with mock.patch.object(pr, "run", fake_run):
+            with self.assertRaises(pr.Failed):
+                pr.merge_pr("o/r", 7, "abc")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
