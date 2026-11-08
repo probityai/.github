@@ -275,8 +275,7 @@ def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], t
             f"Not merged: these checks did not pass on {sha[:12]}.\n\n{lines}", check=False)
         return 1
     try:
-        run("gh", "pr", "merge", str(number), "-R", repo, "--squash", "--delete-branch",
-            "--match-head-commit", sha, env=pr_env())
+        queued = merge_pr(repo, number, sha)
     except Failed as exc:
         if pr_token() or "policy prohibits" not in str(exc):
             raise
@@ -284,8 +283,25 @@ def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], t
               "pull request: set PIN_REFRESH_PR_TOKEN (pin-refresh input pr-token) to a token that starts "
               "pull_request runs; close and reopen the pull request by hand to run its checks", flush=True)
         return 1
-    print(f"MERGED #{number} at {sha}", flush=True)
+    print(f"{'QUEUED' if queued else 'MERGED'} #{number} at {sha}", flush=True)
     return 0
+
+
+def merge_pr(repo: str, number: int, sha: str) -> bool:
+    """Merge the pull request; True when the base branch's merge queue took it instead.
+
+    gh refuses --delete-branch on a base branch that has a merge queue, so there the
+    request goes again without it and the queue merges the pull request; the repository's
+    delete-on-merge setting removes the branch."""
+    args = ["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", sha]
+    try:
+        run(*args, "--delete-branch", env=pr_env())
+        return False
+    except Failed as exc:
+        if "merge queue" not in str(exc):
+            raise
+    run(*args, env=pr_env())
+    return True
 
 
 def main(argv: list[str] | None = None) -> int:
