@@ -176,5 +176,31 @@ class BrewResources(unittest.TestCase):
                                     "probityai/tap/demo")
 
 
+
+class GitHubDecisions(unittest.TestCase):
+    """The pure choices of the GitHub half: which run counts and which ref is the merge group."""
+
+    def test_an_older_run_on_the_same_commit_never_counts(self):
+        runs = [{"databaseId": 10, "headSha": "abc"}, {"databaseId": 7, "headSha": "abc"}]
+        self.assertIsNone(pr.newest_run_after(runs, "abc", baseline=10))
+
+    def test_the_newest_run_after_the_dispatch_counts(self):
+        runs = [{"databaseId": 12, "headSha": "abc"}, {"databaseId": 11, "headSha": "abc"},
+                {"databaseId": 13, "headSha": "zzz"}, {"databaseId": 9, "headSha": "abc"}]
+        self.assertEqual(pr.newest_run_after(runs, "abc", baseline=10), 12)
+
+    def test_the_merge_group_ref_is_found_for_its_pull_request_only(self):
+        refs = [
+            {"ref": "refs/heads/gh-readonly-queue/main/pr-28-aaaa", "object": {"sha": "s28"}},
+            {"ref": "refs/heads/gh-readonly-queue/main/pr-288-bbbb", "object": {"sha": "s288"}},
+        ]
+        self.assertEqual(pr.queue_ref_for(refs, "main", 288), ("gh-readonly-queue/main/pr-288-bbbb", "s288"))
+        self.assertIsNone(pr.queue_ref_for(refs, "main", 2))
+        self.assertIsNone(pr.queue_ref_for([], "main", 288))
+
+    def test_no_second_credential_is_read(self):
+        source = (HERE / "pin-refresh.py").read_text(encoding="utf-8")
+        self.assertNotIn("PIN_REFRESH_PR_TOKEN", source)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
