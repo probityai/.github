@@ -28,14 +28,17 @@ Exit 0 when nothing lags or the bump merged; 1 when a check failed or a pin rema
 that nothing here can move; 2 when it could not run (a registry, git or gh failed).
 Needs GH_TOKEN with contents, pull-requests and actions write on this repository.
 
-WHY THE PULL REQUEST NEEDS ITS OWN TOKEN. GitHub starts no pull_request run for a push or
-a pull request made with the Actions GITHUB_TOKEN, so the required check never appears on
-such a pull request: the dispatched CI run passes, and the merge is still refused ("the
-base branch policy prohibits the merge"; probityai/.github#31 and probity#256 sat with no
-check for hours). With PIN_REFRESH_PR_TOKEN set (a GitHub App or fine-grained token with
-contents and pull-requests write), the push, the pull request and the merge use it, its
-pull_request run is waited for, and the merge goes through. Without it, a refused merge
-exits 1 and names the missing secret instead of reporting that the script could not run.
+HOW IT MERGES WITH THE ACTIONS TOKEN ALONE. GitHub starts no pull_request or merge_group
+run for anything the Actions GITHUB_TOKEN does, but it does start a workflow_dispatch run,
+and a required check is matched by its name and its app on the commit, whatever event ran
+it. So every check this waits for is a run it dispatched itself, and only a run created
+after its own dispatch counts (an older run on the same commit once passed for a new one
+that failed; probityai/.github#33). Where the base branch has a merge queue, a direct merge
+is refused ("Cannot use --delete-branch when merge queue enabled", "the base branch policy
+prohibits the merge"; probityai/probity#288, probityai/agent-evidence-vectors#530), so the
+pull request is enqueued and each --ci workflow is dispatched on the queue's own
+gh-readonly-queue ref when no run of it reached that commit. No second credential, App or
+operator step is involved.
 """
 
 from __future__ import annotations
@@ -88,16 +91,6 @@ def run(
     return done.stdout
 
 
-def pr_token() -> str:
-    """The token that opens and merges the pull request: one that starts pull_request runs."""
-    return os.environ.get("PIN_REFRESH_PR_TOKEN", "")
-
-
-def pr_env() -> dict[str, str] | None:
-    token = pr_token()
-    return {**os.environ, "GH_TOKEN": token, "GITHUB_TOKEN": token} if token else None
-
-
 def push_env() -> dict[str, str]:
     """The environment that authenticates a push with GH_TOKEN, kept out of every printed command.
 
@@ -107,7 +100,7 @@ def push_env() -> dict[str, str]:
     header makes GitHub refuse the push with HTTP 400 ("Duplicate header"), whichever
     workflow checked the repository out.
     """
-    token = pr_token() or os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
     basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
     return {
         **os.environ,
@@ -187,17 +180,30 @@ def open_pin_prs(repo: str) -> list[dict]:
     return [p for p in prs if p["headRefName"].startswith(BRANCH_PREFIX)]
 
 
+def newest_run_after(runs: list[dict], sha: str, baseline: int) -> int | None:
+    """The newest run on `sha` created after `baseline`; an older run on the same commit never counts."""
+    ids = [r["databaseId"] for r in runs if r["headSha"] == sha and r["databaseId"] > baseline]
+    return max(ids) if ids else None
+
+
+def list_runs(repo: str, workflow: str, branch: str) -> list[dict]:
+    return gh_json("run", "list", "-R", repo, "--workflow", workflow, "--branch", branch,
+                   "--json", "databaseId,headSha,event", "--limit", "50") or []
+
+
 def dispatch_and_wait(repo: str, workflow: str, branch: str, sha: str, timeout_s: int) -> tuple[str, str]:
-    """Run one workflow on the branch; return (conclusion, url) of the run on `sha`."""
+    """Run one workflow on the branch; return (conclusion, url) of the run it started on `sha`."""
+    baseline = max((r["databaseId"] for r in list_runs(repo, workflow, branch)), default=0)
     run("gh", "workflow", "run", workflow, "-R", repo, "--ref", branch)
+    return wait_run(repo, workflow, branch, sha, baseline, timeout_s)
+
+
+def wait_run(repo: str, workflow: str, branch: str, sha: str, baseline: int, timeout_s: int) -> tuple[str, str]:
     deadline = time.monotonic() + timeout_s
     run_id = None
     while time.monotonic() < deadline:
         if run_id is None:
-            runs = gh_json("run", "list", "-R", repo, "--workflow", workflow, "--branch", branch,
-                           "--event", "workflow_dispatch", "--json", "databaseId,headSha", "--limit", "20")
-            ids = [r["databaseId"] for r in runs if r["headSha"] == sha]
-            run_id = max(ids) if ids else None
+            run_id = newest_run_after(list_runs(repo, workflow, branch), sha, baseline)
         if run_id is not None:
             view = gh_json("run", "view", str(run_id), "-R", repo, "--json", "status,conclusion,url")
             if view["status"] == "completed":
@@ -206,18 +212,61 @@ def dispatch_and_wait(repo: str, workflow: str, branch: str, sha: str, timeout_s
     return "timed_out", f"{workflow} on {branch} (run {run_id or 'never started'})"
 
 
-def wait_pr_checks(repo: str, number: int, sha: str, timeout_s: int) -> tuple[str, str]:
-    """Wait for the checks the pull request itself started; return (conclusion, detail)."""
+def has_merge_queue(repo: str, base: str) -> bool:
+    rules = gh_json("api", f"repos/{repo}/rules/branches/{base}") or []
+    return any(r.get("type") == "merge_queue" for r in rules)
+
+
+def queue_ref_for(refs: list[dict], base: str, number: int) -> tuple[str, str] | None:
+    """(branch, sha) of the merge group GitHub built for pull request `number`, if any."""
+    prefix = f"refs/heads/gh-readonly-queue/{base}/pr-{number}-"
+    hits = [(r["ref"].removeprefix("refs/heads/"), r["object"]["sha"]) for r in refs if r["ref"].startswith(prefix)]
+    return hits[-1] if hits else None
+
+
+def enqueue(repo: str, number: int, sha: str) -> None:
+    node = gh_json("pr", "view", str(number), "-R", repo, "--json", "id")["id"]
+    run("gh", "api", "graphql", "-f",
+        "query=mutation($id:ID!,$oid:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,"
+        "expectedHeadOid:$oid}){mergeQueueEntry{position}}}", "-f", f"id={node}", "-f", f"oid={sha}")
+
+
+def pr_queue_state(repo: str, number: int) -> tuple[str, bool]:
+    owner, name = repo.split("/", 1)
+    data = gh_json("api", "graphql", "-f",
+                   "query=query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p)"
+                   "{state isInMergeQueue}}}", "-f", f"o={owner}", "-f", f"n={name}", "-F", f"p={number}")
+    pull = data["data"]["repository"]["pullRequest"]
+    return pull["state"], bool(pull["isInMergeQueue"])
+
+
+def land_through_queue(repo: str, base: str, number: int, sha: str, ci: list[str], timeout_s: int,
+                       grace_s: int = 180) -> tuple[bool, str]:
+    """Enqueue, make sure every --ci workflow runs on the merge group, and wait for the merge."""
+    enqueue(repo, number, sha)
+    print(f"QUEUED #{number} at {sha}", flush=True)
     deadline = time.monotonic() + timeout_s
+    served: set[str] = set()
+    seen_at: dict[str, float] = {}
     while time.monotonic() < deadline:
-        view = gh_json("pr", "view", str(number), "-R", repo, "--json", "headRefOid,statusCheckRollup")
-        rollup = view["statusCheckRollup"] or []
-        if view["headRefOid"] == sha and rollup and all(c.get("status", "COMPLETED") == "COMPLETED" for c in rollup):
-            bad = [c.get("name") or c.get("context") for c in rollup
-                   if (c.get("conclusion") or c.get("state")) not in ("SUCCESS", "SKIPPED", "NEUTRAL")]
-            return ("success", "") if not bad else ("failure", ", ".join(map(str, bad)))
+        state, queued = pr_queue_state(repo, number)
+        if state == "MERGED":
+            return True, ""
+        refs = gh_json("api", f"repos/{repo}/git/matching-refs/heads/gh-readonly-queue/{base}/pr-{number}-") or []
+        group = queue_ref_for(refs, base, number)
+        if not queued and group is None:
+            return False, f"#{number} left the merge queue without merging"
+        if group is not None:
+            ref, gsha = group
+            seen_at.setdefault(gsha, time.monotonic())
+            if gsha not in served and time.monotonic() - seen_at[gsha] >= grace_s:
+                for wf in ci:
+                    if not [r for r in list_runs(repo, wf, ref) if r["headSha"] == gsha]:
+                        print(f"no {wf} run reached merge group {gsha[:12]}; dispatching it on {ref}", flush=True)
+                        run("gh", "workflow", "run", wf, "-R", repo, "--ref", ref, check=False)
+                served.add(gsha)
         time.sleep(20)
-    return "timed_out", "no completed pull_request checks"
+    return False, f"#{number} was not merged within {timeout_s}s"
 
 
 def reuse_pushed_branch(repo: str, root: Path, branch: str, sha: str) -> str:
@@ -253,8 +302,7 @@ def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], t
         number = mine[0]["number"]
     else:
         url = run("gh", "pr", "create", "-R", repo, "--base", base, "--head", branch,
-                  "--title", "chore(pins): move family pins to the newest releases", "--body", body,
-                  env=pr_env()).strip()
+                  "--title", "chore(pins): move family pins to the newest releases", "--body", body).strip()
         number = int(url.rstrip("/").rsplit("/", 1)[1])
     for old in existing:
         if old["headRefName"] != branch:
@@ -264,44 +312,23 @@ def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], t
     for wf, conclusion, url in results:
         print(f"CI {wf}: {conclusion} {url}", flush=True)
     failed = [(wf, c, u) for wf, c, u in results if c != "success"]
-    if not failed and pr_token():
-        conclusion, detail = wait_pr_checks(repo, number, sha, timeout_s)
-        print(f"PR checks: {conclusion} {detail}", flush=True)
-        if conclusion != "success":
-            failed = [("pull_request checks", conclusion, detail)]
     if failed:
         lines = "\n".join(f"- {wf}: {c} ({u})" for wf, c, u in failed)
         run("gh", "pr", "comment", str(number), "-R", repo, "--body",
             f"Not merged: these checks did not pass on {sha[:12]}.\n\n{lines}", check=False)
         return 1
-    try:
-        queued = merge_pr(repo, number, sha)
-    except Failed as exc:
-        if pr_token() or "policy prohibits" not in str(exc):
-            raise
-        print(f"pin-refresh: #{number} passed its dispatched CI but the required check never reached the "
-              "pull request: set PIN_REFRESH_PR_TOKEN (pin-refresh input pr-token) to a token that starts "
-              "pull_request runs; close and reopen the pull request by hand to run its checks", flush=True)
-        return 1
-    print(f"{'QUEUED' if queued else 'MERGED'} #{number} at {sha}", flush=True)
+    if has_merge_queue(repo, base):
+        merged, why = land_through_queue(repo, base, number, sha, ci, timeout_s)
+        if not merged:
+            run("gh", "pr", "comment", str(number), "-R", repo, "--body", f"Not merged: {why}.", check=False)
+            print(f"pin-refresh: {why}", flush=True)
+            return 1
+    else:
+        run("gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", sha)
+    run("git", "push", f"https://github.com/{repo}.git", f":refs/heads/{branch}", cwd=root, env=push_env(),
+        check=False)
+    print(f"MERGED #{number} at {sha}", flush=True)
     return 0
-
-
-def merge_pr(repo: str, number: int, sha: str) -> bool:
-    """Merge the pull request; True when the base branch's merge queue took it instead.
-
-    gh refuses --delete-branch on a base branch that has a merge queue, so there the
-    request goes again without it and the queue merges the pull request; the repository's
-    delete-on-merge setting removes the branch."""
-    args = ["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", sha]
-    try:
-        run(*args, "--delete-branch", env=pr_env())
-        return False
-    except Failed as exc:
-        if "merge queue" not in str(exc):
-            raise
-    run(*args, env=pr_env())
-    return True
 
 
 def main(argv: list[str] | None = None) -> int:
