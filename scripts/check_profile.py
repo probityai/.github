@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -22,15 +24,30 @@ INSTALL = re.compile(r"^```(?:bash|sh)\n(?:pip install probityai|uvx agent-evide
 PIN = re.compile(r"\b([a-z][a-z0-9-]*)==(\d+\.\d+\.\d+)\b")
 
 
+def _read_with_retry(request: Request, url: str, attempts: int = 4) -> bytes:
+    """Read one link, retrying only gateway errors and network faults; a 4xx fails at once."""
+    for attempt in range(attempts):
+        try:
+            with urlopen(request, timeout=30) as response:
+                if response.status != 200:
+                    raise ValueError(f"Link did not return HTTP 200: {url}")
+                return response.read(1_048_577)
+        except HTTPError as error:
+            if error.code < 500 or attempt == attempts - 1:
+                raise
+        except URLError:
+            if attempt == attempts - 1:
+                raise
+        time.sleep(2**attempt)
+    raise AssertionError("unreachable")
+
+
 def fetch(url: str) -> bytes:
     parts = urlsplit(url)
     if parts.scheme != "https" or parts.hostname not in HOSTS or parts.username or parts.password:
         raise ValueError(f"Unapproved public link: {url}")
     request = Request(url, headers={"User-Agent": "Probity-profile-check"})
-    with urlopen(request, timeout=30) as response:
-        if response.status != 200:
-            raise ValueError(f"Link did not return HTTP 200: {url}")
-        data = response.read(1_048_577)
+    data = _read_with_retry(request, url)
     if not data or len(data) > 1_048_576:
         raise ValueError(f"Empty or oversized public document: {url}")
     return data
