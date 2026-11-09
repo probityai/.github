@@ -41,4 +41,3 @@ jobs:
         with:
           ci: profile.yml
           token: ${{ github.token }}
-          pr-token: ${{ secrets.PIN_REFRESH_PR_TOKEN }}
