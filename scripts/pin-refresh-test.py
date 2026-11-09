@@ -176,34 +176,31 @@ class BrewResources(unittest.TestCase):
                                     "probityai/tap/demo")
 
 
-class MergeTest(unittest.TestCase):
-    def test_merge_queue_refusal_retries_without_delete_branch(self):
-        calls = []
 
-        def fake_run(*args, **kw):
-            calls.append(args)
-            if "--delete-branch" in args:
-                raise pr.Failed("X Cannot use `-d` or `--delete-branch` when merge queue enabled")
-            return ""
+class GitHubDecisions(unittest.TestCase):
+    """The pure choices of the GitHub half: which run counts and which ref is the merge group."""
 
-        with mock.patch.object(pr, "run", fake_run):
-            self.assertTrue(pr.merge_pr("o/r", 7, "abc"))
-        self.assertEqual(len(calls), 2)
-        self.assertNotIn("--delete-branch", calls[1])
-        self.assertIn("--match-head-commit", calls[1])
+    def test_an_older_run_on_the_same_commit_never_counts(self):
+        runs = [{"databaseId": 10, "headSha": "abc"}, {"databaseId": 7, "headSha": "abc"}]
+        self.assertIsNone(pr.newest_run_after(runs, "abc", baseline=10))
 
-    def test_direct_merge_reports_merged(self):
-        with mock.patch.object(pr, "run", return_value=""):
-            self.assertFalse(pr.merge_pr("o/r", 7, "abc"))
+    def test_the_newest_run_after_the_dispatch_counts(self):
+        runs = [{"databaseId": 12, "headSha": "abc"}, {"databaseId": 11, "headSha": "abc"},
+                {"databaseId": 13, "headSha": "zzz"}, {"databaseId": 9, "headSha": "abc"}]
+        self.assertEqual(pr.newest_run_after(runs, "abc", baseline=10), 12)
 
-    def test_other_merge_failures_still_raise(self):
-        def fake_run(*args, **kw):
-            raise pr.Failed("policy prohibits the merge")
+    def test_the_merge_group_ref_is_found_for_its_pull_request_only(self):
+        refs = [
+            {"ref": "refs/heads/gh-readonly-queue/main/pr-28-aaaa", "object": {"sha": "s28"}},
+            {"ref": "refs/heads/gh-readonly-queue/main/pr-288-bbbb", "object": {"sha": "s288"}},
+        ]
+        self.assertEqual(pr.queue_ref_for(refs, "main", 288), ("gh-readonly-queue/main/pr-288-bbbb", "s288"))
+        self.assertIsNone(pr.queue_ref_for(refs, "main", 2))
+        self.assertIsNone(pr.queue_ref_for([], "main", 288))
 
-        with mock.patch.object(pr, "run", fake_run):
-            with self.assertRaises(pr.Failed):
-                pr.merge_pr("o/r", 7, "abc")
-
+    def test_no_second_credential_is_read(self):
+        source = (HERE / "pin-refresh.py").read_text(encoding="utf-8")
+        self.assertNotIn("PIN_REFRESH_PR_TOKEN", source)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
