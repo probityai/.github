@@ -366,6 +366,49 @@ class Grace(unittest.TestCase):
              "0.3.5": self.NOW - vp.timedelta(hours=1)}
         self.assertIsNone(self.verdict(h))
 
+    def _attestation(self, repo):
+        import base64, json
+        payload = {"predicate": {"buildDefinition": {"externalParameters": {"workflow": {"repository": f"https://github.com/{repo}"}}}}}
+        env = base64.b64encode(json.dumps(payload).encode()).decode()
+        return {"attestations": [{"bundle": {"dsseEnvelope": {"payload": env}}}]}
+
+    def test_a_token_release_is_accepted_when_github_attested_its_digest(self):
+        e = vp.Entry(registry="pypi", name="demo", version="0.3.3", source="lock", own=True, publisher="org/repo")
+        files = {"urls": [{"filename": "demo-0.3.3.tar.gz", "digests": {"sha256": "a" * 64}}]}
+
+        def fetch(url, **kwargs):
+            if url.endswith("/json"):
+                return files
+            if "/integrity/" in url:
+                return None
+            self.assertIn("/repos/org/repo/attestations/sha256:" + "a" * 64, url)
+            return self._attestation("org/repo")
+
+        with mock.patch.object(vp, "fetch_json", side_effect=fetch):
+            self.assertEqual(vp.publisher_of(e, "0.3.3"), "org/repo")
+
+    def test_a_release_with_neither_pypi_provenance_nor_an_attestation_is_unread(self):
+        e = vp.Entry(registry="pypi", name="demo", version="0.3.3", source="lock", own=True, publisher="org/repo")
+        files = {"urls": [{"filename": "demo-0.3.3.tar.gz", "digests": {"sha256": "b" * 64}}]}
+
+        def fetch(url, **kwargs):
+            return files if url.endswith("/json") else None
+
+        with mock.patch.object(vp, "fetch_json", side_effect=fetch):
+            self.assertIsNone(vp.publisher_of(e, "0.3.3"))
+
+    def test_an_attestation_from_another_repository_names_that_repository(self):
+        e = vp.Entry(registry="pypi", name="demo", version="0.3.3", source="lock", own=True, publisher="org/repo")
+        files = {"urls": [{"filename": "demo-0.3.3.tar.gz", "digests": {"sha256": "c" * 64}}]}
+
+        def fetch(url, **kwargs):
+            if url.endswith("/json"):
+                return files
+            return None if "/integrity/" in url else self._attestation("someone/else")
+
+        with mock.patch.object(vp, "fetch_json", side_effect=fetch):
+            self.assertEqual(vp.publisher_of(e, "0.3.3"), "someone/else")
+
     def test_registry_report_counts_grace_as_agreeing_and_short_as_red(self):
         root = git_repo({"version-pins.toml": 'repository = "probityai/demo"\n[family]\n"pypi:demo" = "0.3.3"\n'})
         self.addCleanup(shutil.rmtree, root)

@@ -52,6 +52,7 @@ through the probityai/.github/actions/version-pins action, pinned to a commit.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -774,6 +775,31 @@ def newest_tag(e: Entry) -> str | None:
     return max(found, key=_vkey) if found else None
 
 
+def github_attested_repo(repo: str | None, sha256: str) -> str | None:
+    """owner/name of the workflow repository GitHub holds a build attestation from for `sha256`, or None.
+
+    Asks the attestations of `repo` (a public repository needs no token), so only an attestation made
+    by that repository's own workflow counts.
+    """
+    if not repo:
+        return None
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    headers = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = fetch_json(f"https://api.github.com/repos/{repo}/attestations/sha256:{sha256}", missing_ok=True, headers=headers)
+    for item in (data or {}).get("attestations", []):
+        try:
+            payload = json.loads(base64.b64decode(item["bundle"]["dsseEnvelope"]["payload"]))
+            workflow = payload["predicate"]["buildDefinition"]["externalParameters"]["workflow"]
+        except (KeyError, TypeError, ValueError):
+            continue
+        prefix = "https://github.com/"
+        if workflow.get("repository", "").startswith(prefix):
+            return workflow["repository"][len(prefix):]
+    return None
+
+
 def publisher_of(e: Entry, version: str) -> str | None:
     """The repository a registry records as the publisher of `version`."""
     if e.registry == "pypi":
@@ -786,7 +812,13 @@ def publisher_of(e: Entry, version: str) -> str | None:
                 headers={"Accept": "application/vnd.pypi.integrity.v1+json"},
             )
             if prov is None:
-                return None
+                # A release uploaded with the account token carries no PyPI provenance. Its record is
+                # the build attestation the release workflow made for the same SHA-256 digest.
+                built = github_attested_repo(e.publisher, item["digests"]["sha256"])
+                if built is None:
+                    return None
+                repos.add(built)
+                continue
             repos |= {b["publisher"].get("repository") for b in prov["attestation_bundles"]}
         return ",".join(sorted(r for r in repos if r)) or None
     if e.registry == "crates":
