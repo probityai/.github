@@ -11,6 +11,7 @@ from __future__ import annotations
 import http.server
 import importlib.util
 import io
+import os
 import shutil
 import subprocess
 import sys
@@ -155,6 +156,74 @@ class PushAuth(unittest.TestCase):
         self.assertEqual(len(seen), 1, seen)
         self.assertEqual(len(seen[0]), 1, f"the request carried {seen[0]}")
         self.assertIn("eC1hY2Nlc3MtdG9rZW46bmV3", seen[0][0])  # x-access-token:new
+
+
+class PushedBranch(unittest.TestCase):
+    """An hourly run that finds its bump already pushed pushes a fast-forward, whatever moved under it."""
+
+    def git(self, root: Path, *args: str) -> str:
+        return subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                              check=True, capture_output=True, text=True).stdout.strip()
+
+    def setUp(self):
+        self.remote = Path(tempfile.mkdtemp(prefix="pin-remote-"))
+        self.addCleanup(shutil.rmtree, self.remote)
+        subprocess.run(["git", "init", "-q", "--bare", str(self.remote)], check=True)
+        self.url = self.remote.as_uri()
+        self.root = repo({"version-pins.toml": "a = 1\n", "README.md": "readme\n"})
+        self.addCleanup(shutil.rmtree, self.root)
+        self.base = self.git(self.root, "rev-parse", "--abbrev-ref", "HEAD")
+        self.git(self.root, "push", "-q", self.url, "HEAD:refs/heads/main")
+
+    def bump(self, branch: str, when: str = "2026-01-01T00:00:00Z") -> str:
+        """Commit the bump at a fixed time; two bumps in the same second are otherwise one commit."""
+        (self.root / "version-pins.toml").write_text("a = 2\n")
+        self.git(self.root, "checkout", "-q", "-B", branch)
+        env = {**os.environ, "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when}
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam",
+                        "bump"], check=True, capture_output=True, env=env)
+        return self.git(self.root, "rev-parse", "HEAD")
+
+    def push(self, branch: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(self.root), "push", "-q", self.url, f"HEAD:refs/heads/{branch}"],
+                              capture_output=True, text=True, check=False)
+
+    def test_the_same_bump_on_the_same_base_reuses_the_pushed_commit(self):
+        first = self.bump("pin-refresh/x")
+        self.assertEqual(self.push("pin-refresh/x").returncode, 0)
+        self.git(self.root, "checkout", "-q", self.base)
+        self.git(self.root, "branch", "-q", "-D", "pin-refresh/x")
+        again = self.bump("pin-refresh/x", when="2026-01-02T00:00:00Z")
+        self.assertNotEqual(first, again)
+        with redirect_stdout(io.StringIO()):
+            got = pr.reuse_pushed_branch(self.url, self.root, "pin-refresh/x", again)
+        self.assertEqual(got, first)
+        self.assertEqual(self.push("pin-refresh/x").returncode, 0)
+
+    def test_the_same_bump_on_a_moved_base_is_a_fast_forward_with_the_new_tree(self):
+        self.bump("pin-refresh/x")
+        old_tip = self.git(self.root, "rev-parse", "HEAD")
+        self.assertEqual(self.push("pin-refresh/x").returncode, 0)
+        self.git(self.root, "checkout", "-q", self.base)
+        (self.root / "README.md").write_text("main moved\n")
+        self.git(self.root, "commit", "-qam", "main moved")
+        self.git(self.root, "push", "-q", self.url, "HEAD:refs/heads/main")
+        self.git(self.root, "branch", "-q", "-D", "pin-refresh/x")
+        fresh = self.bump("pin-refresh/x", when="2026-01-02T00:00:00Z")
+        tree = self.git(self.root, "rev-parse", "HEAD^{tree}")
+        self.assertNotEqual(self.push("pin-refresh/x").returncode, 0, "the plain push must be refused here")
+        with redirect_stdout(io.StringIO()):
+            got = pr.reuse_pushed_branch(self.url, self.root, "pin-refresh/x", fresh)
+        self.assertEqual(self.git(self.root, "rev-parse", f"{got}^{{tree}}"), tree)
+        self.assertEqual(self.git(self.root, "rev-parse", f"{got}^1"), old_tip)
+        self.assertEqual(self.git(self.root, "rev-parse", f"{got}^2"), fresh)
+        self.assertIn("Signed-off-by: github-actions[bot]", self.git(self.root, "log", "-1", "--format=%B", got))
+        self.assertEqual(self.push("pin-refresh/x").returncode, 0)
+
+    def test_an_absent_branch_keeps_the_new_commit(self):
+        fresh = self.bump("pin-refresh/y")
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(pr.reuse_pushed_branch(self.url, self.root, "pin-refresh/y", fresh), fresh)
 
 
 class BrewResources(unittest.TestCase):
