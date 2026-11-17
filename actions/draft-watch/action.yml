@@ -1,0 +1,49 @@
+name: draft-watch
+description: >-
+  Watch every IETF Internet-Draft a repository pins in .github/draft-tracking.json. `check`
+  (offline) fails when a file the repository names drafts in cites one no pin covers. `watch`
+  reads the Datatracker, follows renames, and keeps one tracking issue current; a draft it
+  could not read is reported UNREAD and the issue is then left alone. The one copy of
+  scripts/draft-watch.py lives in this repository; callers pin this action to a commit.
+
+inputs:
+  command:
+    description: "check (offline, exits 1 on an uncovered draft) or watch (network, informational)"
+    required: true
+  config:
+    description: "path to the pin list"
+    required: false
+    default: ".github/draft-tracking.json"
+  require-pinned:
+    description: "with check: space-separated files whose revision-named drafts must each be pinned"
+    required: false
+    default: ""
+  token:
+    description: "with watch: a token with issues: write; without it the run only reports"
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: draft-watch ${{ inputs.command }}
+      shell: bash
+      env:
+        COMMAND: ${{ inputs.command }}
+        CONFIG: ${{ inputs.config }}
+        REQUIRE: ${{ inputs.require-pinned }}
+        GH_TOKEN: ${{ inputs.token }}
+        TOOL: ${{ github.action_path }}/../../scripts/draft-watch.py
+      run: |
+        case "$COMMAND" in
+          check)
+            read -r -a files <<< "$REQUIRE"
+            python3 -B "$TOOL" check --config "$CONFIG" --require-pinned "${files[@]}" ;;
+          watch)
+            if [ -n "$GH_TOKEN" ]; then
+              python3 -B "$TOOL" watch --config "$CONFIG" --manage-issue
+            else
+              python3 -B "$TOOL" watch --config "$CONFIG"
+            fi ;;
+          *) echo "unknown command: $COMMAND" >&2; exit 2 ;;
+        esac
