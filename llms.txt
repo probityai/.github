@@ -1,0 +1,16 @@
+# probityai/.github
+
+> The organisation profile and the shared composite actions every probityai repository pins by commit. Each action runs one script kept here, so a fix lands once.
+
+## Shared actions
+
+- [version-pins](https://github.com/probityai/.github/blob/main/actions/version-pins/action.yml): hold every version a page names to its manifest or the family lock, and compare manifests, tags and registries
+- [pin-refresh](https://github.com/probityai/.github/blob/main/docs/pin-refresh.md): move the family lock to the newest releases as a pull request and merge it when CI is green
+- [workflow-fold](https://github.com/probityai/.github/blob/main/actions/workflow-fold/action.yml): one pull-request workflow per repository, ending in an always() ci-ok job
+- [draft-watch](https://github.com/probityai/.github/blob/main/actions/draft-watch/action.yml): watch each pinned IETF Internet-Draft, fail when a cited draft has no pin, and keep one tracking issue current
+
+## Profile
+
+- [Organisation profile](https://github.com/probityai/.github/blob/main/profile/README.md): the tools, what each does and how to install it
+- [Security policy](https://github.com/probityai/.github/blob/main/SECURITY.md): how to report a vulnerability in any public repository
+- [Contributing](https://github.com/probityai/.github/blob/main/CONTRIBUTING.md)

@@ -47,6 +47,17 @@ jobs:
           command: test
       - name: Read back public task and discovery links
         run: python3 scripts/check_profile.py
+      - name: The draft-watch action passes a fixture whose cited draft is pinned
+        uses: ./actions/draft-watch
+        with:
+          command: check
+          config: tests/fixtures/draft-watch/draft-tracking.json
+          require-pinned: tests/fixtures/draft-watch/*.txt
+      - name: The draft-watch action reads the Datatracker (report only, no token)
+        uses: ./actions/draft-watch
+        with:
+          command: watch
+          config: tests/fixtures/draft-watch/draft-tracking.json
 
   # The one status the main ruleset requires. It runs even when a job fails or
   # is skipped, and passes only when every job it needs passed or was skipped

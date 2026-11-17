@@ -1,0 +1,1 @@
+This fixture cites draft-mozleywilliams-dawn-dnsaid-00, which the fixture config pins.

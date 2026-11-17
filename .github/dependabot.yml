@@ -1,0 +1,15 @@
+version: 2
+
+# One weekly pull request moves every action pin together. The composite actions under
+# actions/ pin their own steps, and callers pin those actions, so they move with the
+# workflows. github/codeql-action's init, analyze and upload-sarif must stay at one
+# version: analyze refuses a database another version wrote.
+
+updates:
+  - package-ecosystem: github-actions
+    directories: ["/", "/actions/*"]
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
