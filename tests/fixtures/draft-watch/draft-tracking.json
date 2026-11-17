@@ -1,0 +1,10 @@
+{
+  "issue_title": "[draft-watch] fixture",
+  "drafts": [
+    {
+      "slug": "draft-mozleywilliams-dawn-dnsaid",
+      "known_rev": "00",
+      "why": "fixture for the action self-test in profile.yml"
+    }
+  ]
+}
