@@ -31,9 +31,13 @@ Needs GH_TOKEN with contents, pull-requests and actions write on this repository
 HOW IT MERGES WITH THE ACTIONS TOKEN ALONE. GitHub starts no pull_request or merge_group
 run for anything the Actions GITHUB_TOKEN does, but it does start a workflow_dispatch run,
 and a required check is matched by its name and its app on the commit, whatever event ran
-it. So every check this waits for is a run it dispatched itself, and only a run created
-after its own dispatch counts (an older run on the same commit once passed for a new one
-that failed; probityai/.github#33). Where the base branch has a merge queue, a direct merge
+it. So every check this waits for is a workflow_dispatch run it dispatched itself, and only
+one created after its own dispatch counts (an older run on the same commit once passed for a
+new one that failed; probityai/.github#33). The pull request's own pull_request run is
+created too, but held as action_required with no jobs; it appears about two seconds after
+the dispatch, and counting it as the dispatched run failed every refresh from 14 to 17 Nov
+2026 while the dispatched run passed (probityai/probity#338, #349), so the event is part of
+the match. Where the base branch has a merge queue, a direct merge
 is refused ("Cannot use --delete-branch when merge queue enabled", "the base branch policy
 prohibits the merge"; probityai/probity#288, probityai/agent-evidence-vectors#530), so the
 pull request is enqueued and each --ci workflow is dispatched on the queue's own
@@ -180,9 +184,15 @@ def open_pin_prs(repo: str) -> list[dict]:
     return [p for p in prs if p["headRefName"].startswith(BRANCH_PREFIX)]
 
 
-def newest_run_after(runs: list[dict], sha: str, baseline: int) -> int | None:
-    """The newest run on `sha` created after `baseline`; an older run on the same commit never counts."""
-    ids = [r["databaseId"] for r in runs if r["headSha"] == sha and r["databaseId"] > baseline]
+def newest_run_after(runs: list[dict], sha: str, baseline: int, event: str) -> int | None:
+    """The newest `event` run on `sha` created after `baseline`.
+
+    An older run on the same commit never counts, and neither does a run of another event:
+    the pull_request run GitHub holds for approval is created after the dispatch and is
+    newer than the run this started (the module docstring has the cases).
+    """
+    ids = [r["databaseId"] for r in runs
+           if r["headSha"] == sha and r["databaseId"] > baseline and r.get("event") == event]
     return max(ids) if ids else None
 
 
@@ -203,7 +213,7 @@ def wait_run(repo: str, workflow: str, branch: str, sha: str, baseline: int, tim
     run_id = None
     while time.monotonic() < deadline:
         if run_id is None:
-            run_id = newest_run_after(list_runs(repo, workflow, branch), sha, baseline)
+            run_id = newest_run_after(list_runs(repo, workflow, branch), sha, baseline, "workflow_dispatch")
         if run_id is not None:
             view = gh_json("run", "view", str(run_id), "-R", repo, "--json", "status,conclusion,url")
             if view["status"] == "completed":

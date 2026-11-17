@@ -180,14 +180,31 @@ class BrewResources(unittest.TestCase):
 class GitHubDecisions(unittest.TestCase):
     """The pure choices of the GitHub half: which run counts and which ref is the merge group."""
 
+    D = "workflow_dispatch"
+
     def test_an_older_run_on_the_same_commit_never_counts(self):
-        runs = [{"databaseId": 10, "headSha": "abc"}, {"databaseId": 7, "headSha": "abc"}]
-        self.assertIsNone(pr.newest_run_after(runs, "abc", baseline=10))
+        runs = [{"databaseId": 10, "headSha": "abc", "event": self.D},
+                {"databaseId": 7, "headSha": "abc", "event": self.D}]
+        self.assertIsNone(pr.newest_run_after(runs, "abc", baseline=10, event=self.D))
 
     def test_the_newest_run_after_the_dispatch_counts(self):
-        runs = [{"databaseId": 12, "headSha": "abc"}, {"databaseId": 11, "headSha": "abc"},
-                {"databaseId": 13, "headSha": "zzz"}, {"databaseId": 9, "headSha": "abc"}]
-        self.assertEqual(pr.newest_run_after(runs, "abc", baseline=10), 12)
+        runs = [{"databaseId": 12, "headSha": "abc", "event": self.D},
+                {"databaseId": 11, "headSha": "abc", "event": self.D},
+                {"databaseId": 13, "headSha": "zzz", "event": self.D},
+                {"databaseId": 9, "headSha": "abc", "event": self.D}]
+        self.assertEqual(pr.newest_run_after(runs, "abc", baseline=10, event=self.D), 12)
+
+    def test_the_held_pull_request_run_is_not_the_dispatched_run(self):
+        # probityai/probity#349: the dispatched run 44107698578 passed; the pull_request run
+        # 44107705042 GitHub held for approval was created two seconds later and was read instead.
+        runs = [{"databaseId": 44107705042, "headSha": "8363c12c", "event": "pull_request",
+                 "status": "completed", "conclusion": "action_required"},
+                {"databaseId": 44107698578, "headSha": "8363c12c", "event": self.D,
+                 "status": "completed", "conclusion": "success"}]
+        self.assertEqual(pr.newest_run_after(runs, "8363c12c", baseline=44107600000, event=self.D), 44107698578)
+
+    def test_a_run_without_its_event_never_counts(self):
+        self.assertIsNone(pr.newest_run_after([{"databaseId": 12, "headSha": "abc"}], "abc", 10, self.D))
 
     def test_the_merge_group_ref_is_found_for_its_pull_request_only(self):
         refs = [
