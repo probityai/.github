@@ -1,0 +1,74 @@
+name: kit-index-verify
+
+# Reusable. Runs after the caller's publish job uploaded the kit-<distribution>
+# artifact that kit-release.yml built: every file the index now serves for that
+# version must be one SHA256SUMS lists, with that digest, and every listed file
+# must be served. A file the index holds that the build did not write, or a
+# listed file the index lacks, fails the run with its name.
+#
+#   index:
+#     needs: [kit, publish]
+#     uses: probityai/.github/.github/workflows/kit-index-verify.yml@<commit>
+#     with: {distribution: agent-evidence-vocabulary, version: 1.2.3}
+
+on:
+  workflow_call:
+    inputs:
+      distribution:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      index:
+        description: the JSON API root of the index
+        required: false
+        type: string
+        default: https://pypi.org/pypi
+
+permissions:
+  contents: read
+
+jobs:
+  index:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kit-${{ inputs.distribution }}
+          path: kit
+      - name: The index serves exactly the files SHA256SUMS lists
+        env:
+          DISTRIBUTION: ${{ inputs.distribution }}
+          VERSION: ${{ inputs.version }}
+          INDEX: ${{ inputs.index }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, sys, time, urllib.request
+          url = f"{os.environ['INDEX']}/{os.environ['DISTRIBUTION']}/{os.environ['VERSION']}/json"
+          built = {}
+          for line in open("kit/SHA256SUMS", encoding="ascii"):
+              digest, name = line.split(maxsplit=1)
+              built[name.strip().lstrip("*")] = digest
+          served = None
+          for attempt in range(10):
+              try:
+                  with urllib.request.urlopen(url, timeout=30) as response:
+                      served = {f["filename"]: f["digests"]["sha256"] for f in json.load(response)["urls"]}
+                  if set(served) >= set(built):
+                      break
+              except OSError as exc:
+                  print(f"attempt {attempt + 1}: {exc}")
+              time.sleep(30)
+          if served is None:
+              sys.exit(f"could not read {url}")
+          problems = [f"not served: {name}" for name in sorted(set(built) - set(served))]
+          problems += [f"served, not built here: {name}" for name in sorted(set(served) - set(built))]
+          problems += [f"digest differs: {name}" for name in sorted(set(built) & set(served)) if built[name] != served[name]]
+          for problem in problems:
+              print(f"::error::{problem}")
+          print(f"{len(set(built) & set(served))} of {len(built)} built files served with the built digest")
+          sys.exit(1 if problems else 0)
+          PY

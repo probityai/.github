@@ -1,0 +1,36 @@
+# Data for scripts/spec_drift.py and the reusable workflow .github/workflows/spec-drift.yml.
+# A check change reaches every caller on its next run, because the workflow reads this file
+# from the same commit of this repository as the workflow itself.
+
+# Every family repository, by its directory name under the workflow's family/ checkout.
+[family]
+"probityai/agent-evidence-vectors" = "agent-evidence-vectors"
+"probityai/probity" = "probity"
+"probityai/agent-evidence-matrix" = "agent-evidence-matrix"
+"probityai/evidence-starter" = "evidence-starter"
+
+[scan]
+suffixes = [".md", ".py", ".toml", ".yml", ".yaml", ".go", ".ts", ".rs", ".txt"]
+# Case data, captures and vendored trees name wrong identifiers on purpose.
+skip = [
+    "corpora/*/cases/*", "corpora/*/statements/*", "corpora/*/members/*", "corpora/*/records/*",
+    "*/_raw/*", "*/fixtures/*", "*/testdata/*", "*/vendor/*", "*/node_modules/*",
+    "*/retained/*", "*/upstream/*", "*/spec-vendored/*", "*/third_party/*",
+    # Tests build throwaway identifiers to prove a refusal.
+    "tests/*", "*/tests/*", "scripts/*-test.py", "*/test_*.py",
+]
+
+[[check]]
+id = "predicate-uri-registered"
+home = "probityai/agent-evidence-vectors"
+description = "A predicate type URI named anywhere in the family is listed in spec/predicates/REGISTRY.md."
+
+[[check]]
+id = "w3id-predicate-page"
+home = "probityai/agent-evidence-vectors"
+description = "A w3id.org/agent-evidence predicate URI named anywhere in the family has its page under pages/predicate/v1/."
+
+[[check]]
+id = "corpus-id-published"
+home = "probityai/agent-evidence-vectors"
+description = "A corpus id passed to the Action or the command line is a corpus corpora/REGISTRY.toml publishes."
