@@ -215,9 +215,138 @@ class GitHubDecisions(unittest.TestCase):
         self.assertIsNone(pr.queue_ref_for(refs, "main", 2))
         self.assertIsNone(pr.queue_ref_for([], "main", 288))
 
+    def test_a_pull_request_run_held_for_approval_did_not_start(self):
+        runs = [{"databaseId": 5, "headSha": "abc", "event": "pull_request", "status": "completed",
+                 "conclusion": "action_required"}]
+        started, why = pr.pull_request_run(runs, "abc")
+        self.assertFalse(started)
+        self.assertIn("action_required", why)
+        held_status = [{"databaseId": 5, "headSha": "abc", "event": "pull_request", "status": "action_required",
+                        "conclusion": None}]
+        self.assertFalse(pr.pull_request_run(held_status, "abc")[0])
+
+    def test_a_queued_or_finished_pull_request_run_started(self):
+        for status, conclusion in (("queued", None), ("in_progress", None), ("completed", "success"),
+                                   ("completed", "failure")):
+            runs = [{"databaseId": 6, "headSha": "abc", "event": "pull_request", "status": status,
+                     "conclusion": conclusion}]
+            self.assertTrue(pr.pull_request_run(runs, "abc")[0], (status, conclusion))
+
+    def test_only_a_pull_request_run_on_the_head_counts(self):
+        runs = [{"databaseId": 7, "headSha": "abc", "event": "workflow_dispatch", "status": "completed",
+                 "conclusion": "success"},
+                {"databaseId": 8, "headSha": "old", "event": "pull_request", "status": "completed",
+                 "conclusion": "success"}]
+        started, why = pr.pull_request_run(runs, "abc")
+        self.assertFalse(started)
+        self.assertIn("no pull_request run", why)
+
+    def test_the_newest_pull_request_run_decides(self):
+        runs = [{"databaseId": 9, "headSha": "abc", "event": "pull_request", "status": "completed",
+                 "conclusion": "success"},
+                {"databaseId": 10, "headSha": "abc", "event": "pull_request", "status": "completed",
+                 "conclusion": "action_required"}]
+        self.assertFalse(pr.pull_request_run(runs, "abc")[0])
+
+    def test_stale_pin_branches_spare_open_pull_requests_and_the_current_one(self):
+        refs = [{"ref": f"refs/heads/pin-refresh/{n}"} for n in ("a1", "b2", "c3", "d4")]
+        self.assertEqual(pr.stale_pin_branches(refs, {"pin-refresh/b2"}, keep="pin-refresh/d4"),
+                         ["pin-refresh/a1", "pin-refresh/c3"])
+        self.assertEqual(pr.stale_pin_branches([{"ref": "refs/heads/main"}], set(), keep=""), [])
+
     def test_no_second_credential_is_read(self):
         source = (HERE / "pin-refresh.py").read_text(encoding="utf-8")
         self.assertNotIn("PIN_REFRESH_PR_TOKEN", source)
+
+class VerifyPr(unittest.TestCase):
+    """--verify-pr reads only, and a held run is a refusal, never a pass."""
+
+    def runs_for(self, conclusion):
+        return [{"databaseId": 1, "headSha": "h1", "event": "pull_request", "status": "completed",
+                 "conclusion": conclusion}]
+
+    def call(self, conclusion):
+        def fake(*args, **kwargs):
+            if args[:2] == ("pr", "view"):
+                return {"headRefName": "pin-refresh/x", "headRefOid": "h1"}
+            if args[:2] == ("run", "list"):
+                return self.runs_for(conclusion)
+            raise AssertionError(f"--verify-pr made a call that is not a read: {args}")
+        out = io.StringIO()
+        with mock.patch.object(pr, "gh_json", side_effect=fake), redirect_stdout(out):
+            code = pr.main(["--config", "version-pins.toml", "--ci", "ci.yml", "--repo", "o/r", "--verify-pr", "7"])
+        return code, out.getvalue()
+
+    def test_a_started_run_passes(self):
+        code, out = self.call("success")
+        self.assertEqual(code, 0, out)
+
+    def test_a_held_run_fails(self):
+        code, out = self.call("action_required")
+        self.assertEqual(code, 1, out)
+        self.assertIn("NOT STARTED ci.yml", out)
+
+    def test_no_ci_workflow_is_a_refusal(self):
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err), redirect_stdout(io.StringIO()):
+            code = pr.main(["--config", "version-pins.toml", "--repo", "o/r", "--verify-pr", "7"])
+        self.assertEqual(code, 2)
+
+
+class AppPath(unittest.TestCase):
+    """--pr-events: assert the pull request's own run, hand the merge to the repository, never dispatch."""
+
+    def test_a_started_run_turns_on_auto_merge_and_dispatches_nothing(self):
+        calls = []
+        with mock.patch.object(pr, "await_pull_request_runs", return_value=[]), \
+                mock.patch.object(pr, "auto_merge", side_effect=lambda *a: calls.append(a)), \
+                mock.patch.object(pr, "run") as run, redirect_stdout(io.StringIO()):
+            code = pr.hand_to_repository("o/r", "main", 7, "pin-refresh/x", "h1", ["ci.yml"])
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [("o/r", "main", 7, "h1")])
+        self.assertFalse([c for c in run.call_args_list if c.args[:3] == ("gh", "workflow", "run")])
+
+    def test_a_held_run_comments_and_fails(self):
+        with mock.patch.object(pr, "await_pull_request_runs", return_value=["ci.yml: held"]), \
+                mock.patch.object(pr, "auto_merge") as merge, \
+                mock.patch.object(pr, "run") as run, redirect_stdout(io.StringIO()):
+            code = pr.hand_to_repository("o/r", "main", 7, "pin-refresh/x", "h1", ["ci.yml"])
+        self.assertEqual(code, 1)
+        merge.assert_not_called()
+        self.assertEqual(run.call_args.args[:3], ("gh", "pr", "comment"))
+
+    def test_auto_merge_is_not_asked_twice(self):
+        with mock.patch.object(pr, "gh_json", return_value={"autoMergeRequest": {"enabledAt": "x"}}), \
+                mock.patch.object(pr, "run") as run, redirect_stdout(io.StringIO()):
+            pr.auto_merge("o/r", "main", 7, "h1")
+        run.assert_not_called()
+
+    def test_a_queue_branch_is_asked_without_a_merge_method(self):
+        with mock.patch.object(pr, "gh_json", return_value={"autoMergeRequest": None}), \
+                mock.patch.object(pr, "pr_queue_state", return_value=("OPEN", False)), \
+                mock.patch.object(pr, "has_merge_queue", return_value=True), \
+                mock.patch.object(pr, "run") as run:
+            pr.auto_merge("o/r", "main", 7, "h1")
+        run.assert_called_once_with("gh", "pr", "merge", "7", "-R", "o/r", "--auto", "--match-head-commit", "h1")
+
+
+class ActionWiring(unittest.TestCase):
+    """The composite action mints an App token only when both halves are given, and says which path it took."""
+
+    def setUp(self):
+        self.text = (HERE.parent / "actions" / "pin-refresh" / "action.yml").read_text(encoding="utf-8")
+
+    def test_the_app_token_step_is_pinned_and_conditional(self):
+        self.assertRegex(self.text, r"actions/create-github-app-token@[0-9a-f]{40} # v\d")
+        self.assertIn("inputs.app-client-id != '' && inputs.app-private-key != ''", self.text)
+
+    def test_the_app_path_passes_pr_events(self):
+        self.assertIn("--pr-events", self.text)
+        self.assertIn("steps.app.outputs.token", self.text)
+
+    def test_half_an_app_is_a_refusal(self):
+        self.assertIn("one half of the App", self.text)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
