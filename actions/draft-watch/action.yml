@@ -15,7 +15,7 @@ inputs:
     required: false
     default: ".github/draft-tracking.json"
   require-pinned:
-    description: "with check: space-separated files whose revision-named drafts must each be pinned"
+    description: "with check: space-separated files or globs whose revision-named drafts must each be pinned; a glob that matches nothing fails"
     required: false
     default: ""
   token:
@@ -37,7 +37,10 @@ runs:
       run: |
         case "$COMMAND" in
           check)
-            read -r -a files <<< "$REQUIRE"
+            # Word-split and glob-expand on purpose; without nullglob a glob that matches
+            # nothing stays literal and the script refuses it as a missing file.
+            # shellcheck disable=SC2206
+            files=($REQUIRE)
             python3 -B "$TOOL" check --config "$CONFIG" --require-pinned "${files[@]}" ;;
           watch)
             if [ -n "$GH_TOKEN" ]; then
