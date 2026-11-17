@@ -4,6 +4,8 @@
     pin-refresh.py --config version-pins.toml --ci ci.yml            open, test and merge the bump
     pin-refresh.py --config a.toml --config b.toml --ci ci.yml --formulas --tap probityai/tap
     pin-refresh.py --config version-pins.toml --dry-run              show the bump, change nothing remote
+    pin-refresh.py --config version-pins.toml --ci ci.yml --pr-events     GH_TOKEN is an App installation token
+    pin-refresh.py --config version-pins.toml --ci ci.yml --verify-pr 349 read only: has #349 a real pull_request run?
 
 WHY THIS EXISTS. Every family release left the other public repositories naming the
 release before it: the family locks, the pages they hold and the Homebrew formulas
@@ -28,17 +30,35 @@ Exit 0 when nothing lags or the bump merged; 1 when a check failed or a pin rema
 that nothing here can move; 2 when it could not run (a registry, git or gh failed).
 Needs GH_TOKEN with contents, pull-requests and actions write on this repository.
 
-HOW IT MERGES WITH THE ACTIONS TOKEN ALONE. GitHub starts no pull_request or merge_group
-run for anything the Actions GITHUB_TOKEN does, but it does start a workflow_dispatch run,
-and a required check is matched by its name and its app on the commit, whatever event ran
-it. So every check this waits for is a run it dispatched itself, and only a run created
-after its own dispatch counts (an older run on the same commit once passed for a new one
-that failed; probityai/.github#33). Where the base branch has a merge queue, a direct merge
-is refused ("Cannot use --delete-branch when merge queue enabled", "the base branch policy
-prohibits the merge"; probityai/probity#288, probityai/agent-evidence-vectors#530), so the
-pull request is enqueued and each --ci workflow is dispatched on the queue's own
-gh-readonly-queue ref when no run of it reached that commit. No second credential, App or
-operator step is involved.
+TWO WAYS TO LAND, CHOSEN BY THE TOKEN.
+
+With --pr-events, GH_TOKEN is a GitHub App installation token (the action mints one when it
+is given an App), and what it does starts workflows like a person's push does: the pull
+request gets its own pull_request run and the merge queue its merge_group run. So this
+opens the pull request, asserts that a pull_request run of each --ci workflow started on its
+head (a run GitHub holds as action_required means the token was the Actions token after
+all, and is a refusal), turns on auto-merge, and ends. The repository's own branch rules
+and merge queue decide the merge; nothing here waits for CI or dispatches it.
+
+Without it, GH_TOKEN is the Actions GITHUB_TOKEN. GitHub then holds the pull request's own
+pull_request run as action_required, with no jobs, until a person approves it, and starts
+no merge_group run either; it does start a workflow_dispatch run, and a required check is
+matched by its name and its app on the commit, whatever event ran it. So every check this
+waits for is a workflow_dispatch run it started itself, and only one created after its own
+dispatch counts (an older run on the same commit once passed for a new one that failed;
+probityai/.github#33). The held pull_request run is created about two seconds after the
+dispatch, and counting it as the dispatched run failed every refresh from 14 to 17 Nov 2026
+while the dispatched run passed (probityai/probity#338, #349), so the event is part of the
+match. Where the base branch has a merge queue, a direct merge is refused ("Cannot use
+--delete-branch when merge queue enabled", "the base branch policy prohibits the merge";
+probityai/probity#288, probityai/agent-evidence-vectors#530), so the pull request is
+enqueued and each --ci workflow is dispatched on the queue's own gh-readonly-queue ref when
+no run of it reached that commit. This path stays for a repository with no App: it needs
+no secret, at the cost of a job that waits up to two CI runs and a pull request whose own
+run never starts.
+
+--verify-pr N changes nothing: it reads pull request N's head and exits 0 only when each
+--ci workflow has a pull_request run there that GitHub did not hold for approval.
 """
 
 from __future__ import annotations
@@ -180,15 +200,72 @@ def open_pin_prs(repo: str) -> list[dict]:
     return [p for p in prs if p["headRefName"].startswith(BRANCH_PREFIX)]
 
 
-def newest_run_after(runs: list[dict], sha: str, baseline: int) -> int | None:
-    """The newest run on `sha` created after `baseline`; an older run on the same commit never counts."""
-    ids = [r["databaseId"] for r in runs if r["headSha"] == sha and r["databaseId"] > baseline]
+def newest_run_after(runs: list[dict], sha: str, baseline: int, event: str) -> int | None:
+    """The newest `event` run on `sha` created after `baseline`.
+
+    An older run on the same commit never counts, and neither does a run of another event:
+    the pull_request run GitHub holds for approval is created after the dispatch and is
+    newer than the run this started (the module docstring has the cases).
+    """
+    ids = [r["databaseId"] for r in runs
+           if r["headSha"] == sha and r["databaseId"] > baseline and r.get("event") == event]
     return max(ids) if ids else None
+
+
+HELD = "action_required"
+
+
+def pull_request_run(runs: list[dict], sha: str) -> tuple[bool, str]:
+    """(started, why) for the newest pull_request run on `sha`.
+
+    A run GitHub holds for approval (status or conclusion action_required, no jobs) did not
+    start: that is what the Actions token gets for a pull request it opened.
+    """
+    prs = [r for r in runs if r["headSha"] == sha and r.get("event") == "pull_request"]
+    if not prs:
+        return False, f"no pull_request run on {sha[:12]}"
+    newest = max(prs, key=lambda r: r["databaseId"])
+    rid = newest["databaseId"]
+    if HELD in (newest.get("status"), newest.get("conclusion")):
+        return False, (f"pull_request run {rid} on {sha[:12]} is held as {HELD}: the token that opened the"
+                       " pull request starts no workflow (the Actions token); give the action an App")
+    return True, f"pull_request run {rid} on {sha[:12]} ({newest.get('status')} {newest.get('conclusion') or ''})".rstrip()
 
 
 def list_runs(repo: str, workflow: str, branch: str) -> list[dict]:
     return gh_json("run", "list", "-R", repo, "--workflow", workflow, "--branch", branch,
-                   "--json", "databaseId,headSha,event", "--limit", "50") or []
+                   "--json", "databaseId,headSha,event,status,conclusion", "--limit", "50") or []
+
+
+def await_pull_request_runs(repo: str, branch: str, sha: str, ci: list[str], timeout_s: int) -> list[str]:
+    """Wait until each --ci workflow has a pull_request run on `sha`; return the ones that did not start."""
+    deadline = time.monotonic() + timeout_s
+    pending = list(ci)
+    reasons: dict[str, str] = {}
+    while True:
+        for wf in list(pending):
+            started, why = pull_request_run(list_runs(repo, wf, branch), sha)
+            reasons[wf] = why
+            if started:
+                print(f"CI {wf}: {why}", flush=True)
+                pending.remove(wf)
+        held = [wf for wf in pending if HELD in reasons[wf]]
+        if not pending or held or time.monotonic() >= deadline:
+            return [f"{wf}: {reasons[wf]}" for wf in pending]
+        time.sleep(15)
+
+
+def verify_pr(repo: str, number: int, ci: list[str], timeout_s: int) -> int:
+    """The read-only check behind --verify-pr: 0 when every --ci workflow really ran on the head."""
+    if not ci:
+        raise Failed("--verify-pr needs at least one --ci workflow to look for")
+    view = gh_json("pr", "view", str(number), "-R", repo, "--json", "headRefName,headRefOid")
+    missing = await_pull_request_runs(repo, view["headRefName"], view["headRefOid"], ci, timeout_s)
+    for line in missing:
+        print(f"NOT STARTED {line}", flush=True)
+    print(f"pin-refresh: #{number} " + ("has a pull_request run of every --ci workflow" if not missing
+                                         else f"lacks {len(missing)} of {len(ci)} pull_request runs"), flush=True)
+    return 1 if missing else 0
 
 
 def dispatch_and_wait(repo: str, workflow: str, branch: str, sha: str, timeout_s: int) -> tuple[str, str]:
@@ -203,7 +280,7 @@ def wait_run(repo: str, workflow: str, branch: str, sha: str, baseline: int, tim
     run_id = None
     while time.monotonic() < deadline:
         if run_id is None:
-            run_id = newest_run_after(list_runs(repo, workflow, branch), sha, baseline)
+            run_id = newest_run_after(list_runs(repo, workflow, branch), sha, baseline, "workflow_dispatch")
         if run_id is not None:
             view = gh_json("run", "view", str(run_id), "-R", repo, "--json", "status,conclusion,url")
             if view["status"] == "completed":
@@ -269,6 +346,41 @@ def land_through_queue(repo: str, base: str, number: int, sha: str, ci: list[str
     return False, f"#{number} was not merged within {timeout_s}s"
 
 
+def stale_pin_branches(refs: list[dict], open_heads: set[str], keep: str) -> list[str]:
+    """pin-refresh branches no open pull request uses, except `keep` (the one about to be pushed).
+
+    The repositories do not delete a head branch on merge, and an App-opened pull request is
+    merged by the queue after this job ends, so each run removes the branches earlier runs left.
+    """
+    names = [r["ref"].removeprefix("refs/heads/") for r in refs]
+    return sorted(n for n in names if n.startswith(BRANCH_PREFIX) and n not in open_heads and n != keep)
+
+
+def reap_stale_branches(repo: str, root: Path, open_heads: set[str], keep: str) -> None:
+    refs = gh_json("api", f"repos/{repo}/git/matching-refs/heads/{BRANCH_PREFIX}") or []
+    for name in stale_pin_branches(refs, open_heads, keep):
+        run("git", "push", f"https://github.com/{repo}.git", f":refs/heads/{name}", cwd=root, env=push_env(),
+            check=False)
+
+
+def auto_merge(repo: str, base: str, number: int, sha: str) -> None:
+    """Hand the merge to the repository: auto-merge, which a merge-queue branch turns into enqueue-when-green.
+
+    An hourly run finds its own pull request again until it lands; asking twice is refused by
+    gh, so a pull request already set to merge or already queued is left as it is.
+    """
+    if (gh_json("pr", "view", str(number), "-R", repo, "--json", "autoMergeRequest") or {}).get("autoMergeRequest"):
+        print(f"#{number} already merges when green", flush=True)
+        return
+    if pr_queue_state(repo, number)[1]:
+        print(f"#{number} is already in the merge queue", flush=True)
+        return
+    if has_merge_queue(repo, base):
+        run("gh", "pr", "merge", str(number), "-R", repo, "--auto", "--match-head-commit", sha)
+    else:
+        run("gh", "pr", "merge", str(number), "-R", repo, "--auto", "--squash", "--match-head-commit", sha)
+
+
 def reuse_pushed_branch(repo: str, root: Path, branch: str, sha: str) -> str:
     """The branch is named after the diff, so one that already exists holds this very bump.
 
@@ -286,10 +398,13 @@ def reuse_pushed_branch(repo: str, root: Path, branch: str, sha: str) -> str:
     return run("git", "rev-parse", "HEAD", cwd=root, quiet=True).strip()
 
 
-def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], timeout_s: int) -> int:
+def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], timeout_s: int,
+            pr_events: bool = False) -> int:
     branch = branch_for(root)
     existing = open_pin_prs(repo)
     mine = [p for p in existing if p["headRefName"] == branch]
+    if pr_events:
+        reap_stale_branches(repo, root, {p["headRefName"] for p in existing}, branch)
     run("git", "checkout", "-B", branch, cwd=root)
     run("git", "-c", f"user.name={BOT[0]}", "-c", f"user.email={BOT[1]}", "commit", "-a", "-s", "-q",
         "-m", "chore(pins): move family pins to the newest releases", "-m", "\n".join(notes), cwd=root)
@@ -308,6 +423,8 @@ def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], t
         if old["headRefName"] != branch:
             run("gh", "pr", "close", str(old["number"]), "-R", repo, "--delete-branch",
                 "--comment", f"Superseded by #{number}, which moves the same pins to newer releases.", check=False)
+    if pr_events:
+        return hand_to_repository(repo, base, number, branch, sha, ci)
     results = [(wf, *dispatch_and_wait(repo, wf, branch, sha, timeout_s)) for wf in ci]
     for wf, conclusion, url in results:
         print(f"CI {wf}: {conclusion} {url}", flush=True)
@@ -331,6 +448,21 @@ def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], t
     return 0
 
 
+def hand_to_repository(repo: str, base: str, number: int, branch: str, sha: str, ci: list[str]) -> int:
+    """The App path: the pull request's own runs started, so auto-merge and the queue finish it."""
+    missing = await_pull_request_runs(repo, branch, sha, ci, timeout_s=300)
+    if missing:
+        lines = "\n".join(f"- {m}" for m in missing)
+        run("gh", "pr", "comment", str(number), "-R", repo, "--body",
+            f"Not merged: the pull request's own checks did not start on {sha[:12]}.\n\n{lines}", check=False)
+        print(f"pin-refresh: #{number} has no started pull_request run for {len(missing)} of {len(ci)} workflows",
+              flush=True)
+        return 1
+    auto_merge(repo, base, number, sha)
+    print(f"AUTO-MERGE #{number} at {sha}: the branch rules and merge queue land it", flush=True)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument("--root", type=Path, default=Path.cwd())
@@ -342,9 +474,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base", default="main")
     parser.add_argument("--timeout", type=int, default=75 * 60, help="seconds to wait for each CI run")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--pr-events", action="store_true",
+                        help="GH_TOKEN is an App installation token: open, assert the pull_request run, auto-merge")
+    parser.add_argument("--verify-pr", type=int, metavar="N",
+                        help="read only: exit 0 when pull request N has a started pull_request run of each --ci")
     args = parser.parse_args(argv)
     root = args.root.resolve()
     try:
+        if args.verify_pr is not None:
+            if not args.repo:
+                raise Failed("no --repo and no GITHUB_REPOSITORY")
+            return verify_pr(args.repo, args.verify_pr, args.ci, timeout_s=0)
         notes, remaining = bump(root, args.config, args.formulas, args.tap)
         reverted = restore_workflows(root)
         for path in reverted:
@@ -363,7 +503,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if not args.repo:
             raise Failed("no --repo and no GITHUB_REPOSITORY")
-        return publish(args.repo, root, args.base, notes, args.ci, args.timeout)
+        return publish(args.repo, root, args.base, notes, args.ci, args.timeout, args.pr_events)
     except Failed as exc:
         print(f"pin-refresh: could not run: {exc}", file=sys.stderr)
         return 2
