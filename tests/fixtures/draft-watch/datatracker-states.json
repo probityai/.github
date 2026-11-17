@@ -1,0 +1,62 @@
+[
+ {
+  "id": 1,
+  "slug": "active",
+  "name": "Active",
+  "type": "/api/v1/doc/statetype/draft/"
+ },
+ {
+  "id": 2,
+  "slug": "expired",
+  "name": "Expired",
+  "type": "/api/v1/doc/statetype/draft/"
+ },
+ {
+  "id": 3,
+  "slug": "rfc",
+  "name": "RFC",
+  "type": "/api/v1/doc/statetype/draft/"
+ },
+ {
+  "id": 4,
+  "slug": "repl",
+  "name": "Replaced",
+  "type": "/api/v1/doc/statetype/draft/"
+ },
+ {
+  "id": 5,
+  "slug": "auth-rm",
+  "name": "Withdrawn by Submitter",
+  "type": "/api/v1/doc/statetype/draft/"
+ },
+ {
+  "id": 6,
+  "slug": "ietf-rm",
+  "name": "Withdrawn by IETF",
+  "type": "/api/v1/doc/statetype/draft/"
+ },
+ {
+  "id": 46,
+  "slug": "active",
+  "name": "Active IAB Document",
+  "type": "/api/v1/doc/statetype/draft-stream-iab/"
+ },
+ {
+  "id": 56,
+  "slug": "active",
+  "name": "Active RG Document",
+  "type": "/api/v1/doc/statetype/draft-stream-irtf/"
+ },
+ {
+  "id": 150,
+  "slug": "idexists",
+  "name": "I-D Exists",
+  "type": "/api/v1/doc/statetype/draft-iesg/"
+ },
+ {
+  "id": 171,
+  "slug": "active",
+  "name": "Active editorial stream document",
+  "type": "/api/v1/doc/statetype/draft-stream-editorial/"
+ }
+]

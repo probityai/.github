@@ -7,13 +7,16 @@
 Adapted from scripts/check_draft_status.py of dns-aid/dns-aid-core at commit
 825ccea1259267898df59b80e063317ec6900224 (Apache-2.0). Changes from that version:
 one config holds any number of pinned drafts; a draft whose Datatracker read fails is
-reported UNREAD and the run then leaves the issue alone, instead of crashing or being
-read as quiet; the issue is found by listing the repository's issues, not through the
+reported UNREAD and the run then leaves the issue alone and exits 3, instead of crashing or
+being read as quiet; the issue is found by listing the repository's issues, not through the
 search index, which lags a just-created issue and opened duplicates; and a `check`
 mode, offline, fails when a file the repository names drafts in names one no pin covers.
+A draft's state is read from its state of type `draft` only (active, expired, rfc, repl,
+auth-rm, ietf-rm): the stream state types reuse the slug `active`, so a replaced or
+withdrawn IRTF draft would otherwise read as active.
 
-    draft-watch.py check [--config C] [--require-pinned FILE ...]   offline; exit 1 on a finding
-    draft-watch.py watch [--config C] [--manage-issue] [--repo O/R]  network; exit 0 unless the config is invalid
+    draft-watch.py check [--config C] --require-pinned FILE ...      offline; exit 1 on a finding
+    draft-watch.py watch [--config C] [--manage-issue] [--repo O/R]  network; exit 3 when a pin is unread
 
 The config, .github/draft-tracking.json by default:
 
@@ -32,7 +35,8 @@ cite without a pin, with `unwatched_why`; a digest, not the name, so the config 
 repeat a name the repository has decided not to follow.
 Bump `known_rev` (and `slug` on a rename) in the pull request that brings the repository
 in line with the new revision; until then the issue stays open and says what moved.
-Exit status: 0 done, 1 a `check` finding, 2 the config is missing or invalid.
+Exit status: 0 done, 1 a `check` finding, 2 the config or a named file is missing or invalid,
+3 `watch` could not read every pin (nothing it did not read is reported as current).
 """
 
 from __future__ import annotations
@@ -59,13 +63,25 @@ SLUG = re.compile(r"^draft-[a-z0-9]+(?:-[a-z0-9]+)+$")
 REV = re.compile(r"^\d{2}$")
 # A draft named with its revision, as files cite them: draft-<author>-<words>-NN, not followed by
 # more name. At least two words follow `draft-`, so a shorthand like "draft-bu-00" is not a name.
-NAMED = re.compile(r"\b(draft-[a-z0-9]+(?:-[a-z0-9]+)+?)-(\d{2})(?![a-z0-9-]*[a-z])")
-STATE_PRIORITY = ("rfc", "replaced", "withdrawn", "expired", "active")
+# Text is lowercased before the match. The name may follow any character but a letter or digit,
+# so `aae_draft-x-y-02` and `/draft-x-y-02` are names and `subdraft-x-y-02` is not.
+NAMED = re.compile(r"(?<![a-z0-9])(draft-[a-z0-9]+(?:-[a-z0-9]+)+?)-(\d{2})(?![a-z0-9-]*[a-z])")
+# The Datatracker's state type `draft` (GET /api/v1/doc/state/?type=draft) has exactly these
+# six slugs; each maps to the word this tool reports.
+DRAFT_STATES = {"active": "active", "expired": "expired", "rfc": "rfc", "repl": "replaced",
+                "auth-rm": "withdrawn", "ietf-rm": "withdrawn"}
 ENDED = {"rfc", "replaced", "expired", "withdrawn"}
+CONFIG_KEYS = {"issue_title", "drafts", "unwatched_sha256", "unwatched_why"}
+PIN_KEYS = {"slug", "known_rev", "why", "author_person_id", "watched_keywords"}
+MAX_PAGES = 50
 
 
 class ConfigError(Exception):
     """The tracking config is missing or does not hold a valid pin list."""
+
+
+class ScanError(Exception):
+    """A file named for `check` could not be read as UTF-8 text."""
 
 
 @dataclass(frozen=True)
@@ -96,8 +112,15 @@ class Reading:
             out.append(f"`{self.slug}` is at revision `{self.rev}` (pinned `{self.pin.known_rev}`)")
         if self.state in ENDED:
             out.append(f"`{self.slug}` is now `{self.state}`")
-        out += [f"`{s}` ({t}) may succeed `{self.pin.slug}`" for s, t in self.related]
+        out += [f"`{s}` ({md(t)}) may succeed `{self.pin.slug}`" for s, t in self.related]
         return out
+
+
+def md(text: str) -> str:
+    """A Datatracker title, safe inside a table cell or a comment: no markup, no mention, no issue link."""
+    text = " ".join(text.split())
+    text = re.sub(r"([\\`*_{}\[\]<>()|~!])", r"\\\1", text)
+    return text.replace("@", "&#64;").replace("#", "&#35;")
 
 
 def load_config(path: Path) -> tuple[str, list[Pin]]:
@@ -112,6 +135,8 @@ def load_config_full(path: Path) -> tuple[str, list[Pin], frozenset[str]]:
         raise ConfigError(f"{path}: {exc}") from exc
     if not isinstance(data, dict) or not isinstance(data.get("drafts"), list) or not data["drafts"]:
         raise ConfigError(f"{path}: needs a non-empty `drafts` list")
+    if extra := sorted(set(data) - CONFIG_KEYS):
+        raise ConfigError(f"{path}: unknown keys {extra} (a misspelt key would be ignored silently)")
     title = data.get("issue_title", DEFAULT_TITLE)
     if not isinstance(title, str) or not title.strip():
         raise ConfigError(f"{path}: `issue_title` must be a non-empty string")
@@ -121,6 +146,8 @@ def load_config_full(path: Path) -> tuple[str, list[Pin], frozenset[str]]:
         where = f"{path}: drafts[{i}]"
         if not isinstance(d, dict):
             raise ConfigError(f"{where} is not an object")
+        if extra := sorted(set(d) - PIN_KEYS):
+            raise ConfigError(f"{where}: unknown keys {extra} (a misspelt key would be ignored silently)")
         slug, rev, why = d.get("slug"), d.get("known_rev"), d.get("why")
         if not isinstance(slug, str) or not SLUG.match(slug) or re.search(r"-\d{2}$", slug):
             raise ConfigError(f"{where}: `slug` must be a draft name without its revision, got {slug!r}")
@@ -135,8 +162,8 @@ def load_config_full(path: Path) -> tuple[str, list[Pin], frozenset[str]]:
         words = d.get("watched_keywords", [])
         if (author is None) != (not words):
             raise ConfigError(f"{where}: `author_person_id` and `watched_keywords` go together")
-        if author is not None and (not isinstance(author, int) or isinstance(author, bool)):
-            raise ConfigError(f"{where}: `author_person_id` must be an integer")
+        if author is not None and (not isinstance(author, int) or isinstance(author, bool) or author <= 0):
+            raise ConfigError(f"{where}: `author_person_id` must be a positive integer")
         if not isinstance(words, list) or not all(isinstance(w, str) and w for w in words):
             raise ConfigError(f"{where}: `watched_keywords` must be a list of strings")
         pins.append(Pin(slug, rev, why, author, tuple(w.lower() for w in words)))
@@ -152,15 +179,22 @@ def load_config_full(path: Path) -> tuple[str, list[Pin], frozenset[str]]:
 
 
 def named_drafts(text: str) -> set[str]:
-    """Every draft name (without its revision) that the text cites with a revision."""
-    return {m.group(1) for m in NAMED.finditer(text)}
+    """Every draft name (without its revision) that the text cites with a revision, in any case."""
+    return {m.group(1) for m in NAMED.finditer(text.lower())}
+
+
+def read_text(f: Path) -> str:
+    try:
+        return f.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ScanError(f"{f}: cannot be scanned as UTF-8 text ({type(exc).__name__}: {exc})") from exc
 
 
 def uncovered(pins: list[Pin], files: list[Path], unwatched: frozenset[str] = frozenset()) -> list[str]:
     pinned = {p.slug for p in pins}
     out = []
-    for f in files:
-        for slug in sorted(named_drafts(f.read_text(encoding="utf-8")) - pinned):
+    for f in dict.fromkeys(files):
+        for slug in sorted(named_drafts(read_text(f)) - pinned):
             if hashlib.sha256(slug.encode()).hexdigest() not in unwatched:
                 out.append(f"{f}: names {slug} and no pin in the config covers it")
     return out
@@ -181,28 +215,72 @@ def _tail(uri: str) -> str:
     return uri.rstrip("/").rsplit("/", 1)[-1]
 
 
-def resolve(get: Getter, slug: str, hops: int = 10) -> str:
-    """Follow `replaces` forward to the draft nothing has replaced yet."""
-    seen = {slug}
+def _draft_name(uri: str) -> str:
+    """The draft name at the end of a Datatracker document URI; anything else is a bad read."""
+    name = _tail(uri)
+    if not SLUG.match(name):
+        raise ValueError(f"the Datatracker returned {name!r} where a draft name belongs")
+    return name
+
+
+def memo(get: Getter) -> Getter:
+    """One read per path per run: the same state and document URIs recur across pins."""
+    seen: dict[str, dict[str, Any]] = {}
+
+    def cached(path: str) -> dict[str, Any]:
+        if path not in seen:
+            seen[path] = get(path)
+        return seen[path]
+
+    return cached
+
+
+def pages(get: Getter, path: str) -> list[dict[str, Any]]:
+    """Every object of a list endpoint, following `meta.next`; a list it cannot finish is a bad read."""
+    out: list[dict[str, Any]] = []
+    nxt: str | None = path
+    for _ in range(MAX_PAGES):
+        if not nxt:
+            return out
+        page = get(nxt)
+        out += page["objects"]
+        nxt = (page.get("meta") or {}).get("next")
+    raise ValueError(f"{path} has more than {MAX_PAGES} pages")
+
+
+def resolve(get: Getter, slug: str, hops: int = 10) -> tuple[str, list[tuple[str, str]]]:
+    """Follow `replaces` forward to the draft nothing has replaced yet.
+
+    Returns that name and every other draft that replaced one on the way (a split), so a
+    second successor is reported instead of dropped.
+    """
+    seen, also = {slug}, []
     for _ in range(hops):
         q = urllib.parse.urlencode({"target__name": slug, "relationship__slug": "replaces", "format": "json"})
-        objs = get(f"/api/v1/doc/relateddocument/?{q}").get("objects", [])
-        if not objs:
-            return slug
-        nxt = _tail(objs[0]["source"])
-        if nxt in seen:
-            return slug
-        seen.add(nxt)
-        slug = nxt
-    return slug
+        sources = sorted({_draft_name(o["source"]) for o in pages(get, f"/api/v1/doc/relateddocument/?{q}")})
+        if not sources:
+            return slug, also
+        also += [(s, f"also replaces {slug}") for s in sources[1:] if s not in seen]
+        if sources[0] in seen:
+            return slug, also
+        seen.add(sources[0])
+        slug = sources[0]
+    raise ValueError(f"more than {hops} replacements after the pin; the chain was not followed to its end")
 
 
 def state_of(get: Getter, uris: list[str]) -> str:
-    found = {str(get(u).get("slug") or "").lower() for u in uris}
-    for s in STATE_PRIORITY:
-        if s in found:
-            return s
-    return sorted(found - {""})[0] if found - {""} else "unknown"
+    """The draft's own state, from its one state of type `draft`; the stream states are not read."""
+    found = set()
+    for u in uris:
+        st = get(u)
+        if _tail(str(st.get("type") or "")) == "draft":
+            slug = str(st.get("slug") or "")
+            if slug not in DRAFT_STATES:
+                raise ValueError(f"unknown draft state {slug!r} at {u}")
+            found.add(DRAFT_STATES[slug])
+    if len(found) != 1:
+        raise ValueError(f"expected one state of type draft, found {sorted(found) or 'none'}")
+    return found.pop()
 
 
 def sweep(get: Getter, pin: Pin, current: str) -> list[tuple[str, str]]:
@@ -212,8 +290,8 @@ def sweep(get: Getter, pin: Pin, current: str) -> list[tuple[str, str]]:
         {"person": pin.author_person_id, "document__type": "draft", "format": "json", "limit": 100}
     )
     out = []
-    for entry in get(f"/api/v1/doc/documentauthor/?{q}").get("objects", []):
-        slug = _tail(entry["document"])
+    for entry in pages(get, f"/api/v1/doc/documentauthor/?{q}"):
+        slug = _draft_name(entry["document"])
         if slug in (current, pin.slug):
             continue
         doc = get(entry["document"])
@@ -228,17 +306,20 @@ def sweep(get: Getter, pin: Pin, current: str) -> list[tuple[str, str]]:
 def read(get: Getter, pin: Pin) -> Reading:
     r = Reading(pin)
     try:
-        r.slug = resolve(get, pin.slug)
+        r.slug, also = resolve(get, pin.slug)
         q = urllib.parse.urlencode({"name": r.slug, "format": "json"})
-        objs = get(f"/api/v1/doc/document/?{q}").get("objects", [])
+        objs = get(f"/api/v1/doc/document/?{q}")["objects"]
         if not objs:
             r.unread = f"Datatracker has no document named {r.slug}"
             return r
         r.rev = str(objs[0].get("rev") or "")
+        if not REV.match(r.rev):
+            raise ValueError(f"revision {r.rev!r} is not two digits")
         r.state = state_of(get, objs[0].get("states") or [])
-        r.related = sweep(get, pin, r.slug)
-    except (urllib.error.URLError, OSError, ValueError, KeyError) as exc:
+        r.related = also + sweep(get, pin, r.slug)
+    except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
         r.unread = f"{type(exc).__name__}: {exc}"
+        r.slug, r.rev, r.state, r.related = "", "", "", []
     return r
 
 
@@ -297,15 +378,20 @@ def manage_issue(repo: str, title: str, readings: list[Reading]) -> str:
         url = gh(["issue", "create", "-R", repo, "--title", title, "--body", body]).strip()
         return f"opened {url}"
     old = MARKER.search(issue.get("body") or "")
-    if old and old.group(1) == sig:
-        return f"issue #{issue['number']} already shows this state"
+    same = bool(old) and old.group(1) == sig
     number, is_open = str(issue["number"]), str(issue.get("state", "")).lower() == "open"
-    gh(["issue", "edit", number, "-R", repo, "--body", body])
+    # The issue is open exactly while a pin differs from the Datatracker; one closed by hand
+    # while a pin still differs is reopened, or the difference would go unreported.
+    if same and is_open == bool(notes):
+        return f"issue #{number} already shows this state"
+    if not same:
+        gh(["issue", "edit", number, "-R", repo, "--body", body])
     if notes:
         if not is_open:
             gh(["issue", "reopen", number, "-R", repo])
+        head = "State changed:" if not same else "Reopened: these pins still differ from the Datatracker:"
         gh(["issue", "comment", number, "-R", repo, "--body",
-            "State changed:\n\n" + "\n".join(f"- {n}" for n in notes)])
+            head + "\n\n" + "\n".join(f"- {n}" for n in notes)])
     elif is_open:
         gh(["issue", "comment", number, "-R", repo, "--body", "Every pin now matches the Datatracker."])
         gh(["issue", "close", number, "-R", repo])
@@ -313,7 +399,11 @@ def manage_issue(repo: str, title: str, readings: list[Reading]) -> str:
 
 
 def cmd_check(pins: list[Pin], files: list[Path], unwatched: frozenset[str] = frozenset()) -> int:
-    findings = uncovered(pins, files, unwatched)
+    try:
+        findings = uncovered(pins, files, unwatched)
+    except ScanError as exc:
+        print(f"::error::{exc}")
+        return 2
     for f in findings:
         print(f"::error::{f}")
     print(f"draft-watch check: {len(pins)} pins; {len(files)} files scanned; {len(findings)} uncovered")
@@ -321,6 +411,7 @@ def cmd_check(pins: list[Pin], files: list[Path], unwatched: frozenset[str] = fr
 
 
 def cmd_watch(title: str, pins: list[Pin], manage: bool, repo: str | None, get: Getter = http_get) -> int:
+    get = memo(get)
     readings = [read(get, p) for p in pins]
     for r in readings:
         if r.unread:
@@ -330,10 +421,12 @@ def cmd_watch(title: str, pins: list[Pin], manage: bool, repo: str | None, get: 
     unread = [r for r in readings if r.unread]
     moved = [r for r in readings if r.notes()]
     print(f"draft-watch: {len(readings) - len(unread)} of {len(readings)} read; {len(moved)} moved")
-    if not manage:
-        return 0
     if unread:
-        print(f"::warning::{len(unread)} pins unread, so the tracking issue is left as it is this run")
+        # A pin not read is never reported as current: the run fails, and the issue keeps
+        # whatever it last said.
+        print(f"::error::{len(unread)} of {len(readings)} pins unread; the tracking issue is left as it is this run")
+        return 3
+    if not manage:
         return 0
     if not repo:
         print("::warning::no repository named (--repo or GITHUB_REPOSITORY); the issue was not touched")
@@ -360,6 +453,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"::error::{exc}")
         return 2
     if a.command == "check":
+        if not a.require_pinned:
+            print("::error::check needs --require-pinned with at least one file; scanning none proves nothing")
+            return 2
         missing = [f for f in a.require_pinned if not f.is_file()]
         if missing:
             print(f"::error::--require-pinned names files that do not exist: {', '.join(map(str, missing))}")
