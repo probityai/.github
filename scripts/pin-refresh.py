@@ -381,20 +381,34 @@ def auto_merge(repo: str, base: str, number: int, sha: str) -> None:
         run("gh", "pr", "merge", str(number), "-R", repo, "--auto", "--squash", "--match-head-commit", sha)
 
 
-def reuse_pushed_branch(repo: str, root: Path, branch: str, sha: str) -> str:
+def reuse_pushed_branch(url: str, root: Path, branch: str, sha: str) -> str:
     """The branch is named after the diff, so one that already exists holds this very bump.
 
     A new commit of the same tree has another sha (the commit time differs), and pushing it
     over the old one is refused as a non-fast-forward: an hourly run that finds the earlier
     pull request still open failed here, every hour. Stand on the pushed commit instead.
+
+    The name says nothing about the base, though. Once the default branch moves, the same
+    bump on the new base has another tree, and pushing it was refused the same way (the
+    probityai/probity refresh of 17 Nov 2026, run 44161410339, on #349). Then a commit with
+    the new tree is stood on the pushed tip, with both commits as parents: the push is a
+    fast-forward, nothing is forced, and the pull request's head is the bump on today's base.
     """
-    url = f"https://github.com/{repo}.git"
     if not run("git", "ls-remote", "--heads", url, branch, cwd=root, quiet=True, env=push_env()).strip():
         return sha
-    run("git", "fetch", "-q", url, branch, cwd=root, quiet=True, env=push_env())
-    if run("git", "diff", "--stat", "FETCH_HEAD", "HEAD", cwd=root, quiet=True).strip():
-        return sha
-    run("git", "reset", "-q", "--hard", "FETCH_HEAD", cwd=root, quiet=True)
+    run("git", "fetch", "-q", "--depth=1", url, branch, cwd=root, quiet=True, env=push_env())
+    pushed = run("git", "rev-parse", "FETCH_HEAD", cwd=root, quiet=True).strip()
+    if run("git", "diff", "--stat", pushed, "HEAD", cwd=root, quiet=True).strip():
+        tree = run("git", "rev-parse", "HEAD^{tree}", cwd=root, quiet=True).strip()
+        message = ("chore(pins): move the same bump onto the current base\n\n"
+                   f"Signed-off-by: {BOT[0]} <{BOT[1]}>")
+        env = {**os.environ, "GIT_AUTHOR_NAME": BOT[0], "GIT_AUTHOR_EMAIL": BOT[1],
+               "GIT_COMMITTER_NAME": BOT[0], "GIT_COMMITTER_EMAIL": BOT[1]}
+        moved = run("git", "commit-tree", tree, "-p", pushed, "-p", "HEAD", "-m", message,
+                    cwd=root, quiet=True, env=env).strip()
+        run("git", "reset", "-q", "--hard", moved, cwd=root, quiet=True)
+        return moved
+    run("git", "reset", "-q", "--hard", pushed, cwd=root, quiet=True)
     return run("git", "rev-parse", "HEAD", cwd=root, quiet=True).strip()
 
 
@@ -409,7 +423,7 @@ def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], t
     run("git", "-c", f"user.name={BOT[0]}", "-c", f"user.email={BOT[1]}", "commit", "-a", "-s", "-q",
         "-m", "chore(pins): move family pins to the newest releases", "-m", "\n".join(notes), cwd=root)
     sha = run("git", "rev-parse", "HEAD", cwd=root, quiet=True).strip()
-    sha = reuse_pushed_branch(repo, root, branch, sha)
+    sha = reuse_pushed_branch(f"https://github.com/{repo}.git", root, branch, sha)
     run("git", "push", f"https://github.com/{repo}.git", f"HEAD:refs/heads/{branch}", cwd=root, env=push_env())
     body = ("The family released since these pins were set. This moves each lock, the pages it holds"
             " and any formula, and merges when every check is green.\n\n" + "\n".join(f"- {n}" for n in notes))
