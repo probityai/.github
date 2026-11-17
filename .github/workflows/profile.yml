@@ -53,6 +53,24 @@ jobs:
           command: check
           config: tests/fixtures/draft-watch/draft-tracking.json
           require-pinned: tests/fixtures/draft-watch/*.txt
+      - name: The draft-watch action expands ** across directories
+        uses: ./actions/draft-watch
+        with:
+          command: check
+          config: tests/fixtures/draft-watch/draft-tracking.json
+          require-pinned: tests/**/cited.txt
+      - name: The draft-watch action refuses a check that names no file
+        id: draft-watch-no-file
+        continue-on-error: true
+        uses: ./actions/draft-watch
+        with:
+          command: check
+          config: tests/fixtures/draft-watch/draft-tracking.json
+      - name: That check failed, as it must
+        if: steps.draft-watch-no-file.outcome != 'failure'
+        run: |
+          echo "a draft-watch check over no file passed" >&2
+          exit 1
       - name: The draft-watch action reads the Datatracker (report only, no token)
         uses: ./actions/draft-watch
         with:
