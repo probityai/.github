@@ -1,0 +1,212 @@
+name: kit-release
+
+# Reusable. Builds one pure-Python distribution of a family package (the
+# vectors corpus, the vocabulary, admission, the verifier), writes SHA256SUMS
+# over it, attests every file, checks the attestations in both directions and,
+# when a release tag is given, uploads the files to that GitHub release and
+# verifies what the release now serves. It never publishes to a package index:
+# PyPI trusted publishing does not accept a reusable workflow, so the caller's
+# own publish job uploads the artifact this workflow leaves
+# (kit-<distribution>: dist/, SHA256SUMS, SOURCE-COMMIT), then calls
+# kit-index-verify.yml to prove the index serves the same bytes.
+#
+#   kit:
+#     uses: probityai/.github/.github/workflows/kit-release.yml@<commit>
+#     permissions: {contents: write, id-token: write, attestations: write}
+#     with: {directory: packages/vocabulary, distribution: agent-evidence-vocabulary,
+#            version: 1.2.3, release-tag: agent-evidence-vocabulary-v1.2.3}
+#
+# Every attestation names this workflow as its signer, so a verifier can pin
+# --signer-workflow probityai/.github/.github/workflows/kit-release.yml.
+
+on:
+  workflow_call:
+    inputs:
+      directory:
+        description: the directory holding the distribution's pyproject.toml
+        required: true
+        type: string
+      distribution:
+        description: the distribution name, as on the index
+        required: true
+        type: string
+      version:
+        description: the version the build must carry
+        required: true
+        type: string
+      release-tag:
+        description: an existing GitHub release to upload the files to; empty skips the upload
+        required: false
+        type: string
+        default: ""
+      python-version:
+        required: false
+        type: string
+        default: "3.12"
+    outputs:
+      sums-sha256:
+        description: the SHA-256 of SHA256SUMS
+        value: ${{ jobs.build.outputs.sums }}
+
+permissions:
+  contents: read
+
+env:
+  SIGNER_WORKFLOW: probityai/.github/.github/workflows/kit-release.yml
+
+jobs:
+  build:
+    name: build twice from the commit, check, checksum and install the wheel alone
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      sums: ${{ steps.sums.outputs.sums }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The checkout is the commit that started the run
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.12.8"
+          python-version: ${{ inputs.python-version }}
+          enable-cache: false
+      - name: Build the wheel and the source distribution twice; the bytes must agree
+        env:
+          DIRECTORY: ${{ inputs.directory }}
+          DISTRIBUTION: ${{ inputs.distribution }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
+          uv build --no-create-gitignore --out-dir dist "$DIRECTORY"
+          uv build --no-create-gitignore --out-dir "$RUNNER_TEMP/again" "$DIRECTORY"
+          stem="${DISTRIBUTION//-/_}-$VERSION"
+          test "$(find dist -type f | wc -l)" -eq 2
+          test -f "dist/$stem.tar.gz"
+          compgen -G "dist/$stem-*.whl" > /dev/null
+          (cd dist && sha256sum -- *) > SHA256SUMS
+          (cd "$RUNNER_TEMP/again" && sha256sum -c "$GITHUB_WORKSPACE/SHA256SUMS")
+          uvx --from twine==7.0.0 twine check --strict dist/*
+          git rev-parse HEAD > SOURCE-COMMIT
+      - name: Install the wheel alone, outside the checkout
+        env:
+          DISTRIBUTION: ${{ inputs.distribution }}
+        run: |
+          set -euo pipefail
+          uv venv "$RUNNER_TEMP/consumer"
+          uv pip install --python "$RUNNER_TEMP/consumer" dist/*.whl
+          cd "$RUNNER_TEMP"
+          uv pip check --python "$RUNNER_TEMP/consumer"
+          uv pip show --python "$RUNNER_TEMP/consumer" "$DISTRIBUTION"
+      - id: sums
+        run: echo "sums=$(sha256sum SHA256SUMS | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-${{ inputs.distribution }}
+          path: |
+            dist/
+            SHA256SUMS
+            SOURCE-COMMIT
+          if-no-files-found: error
+          retention-days: 30
+
+  attest:
+    name: attest every file and SHA256SUMS
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kit-${{ inputs.distribution }}
+          path: kit
+      - name: The files are the ones the build wrote
+        env:
+          SUMS: ${{ needs.build.outputs.sums }}
+        run: |
+          set -euo pipefail
+          test "$(sha256sum kit/SHA256SUMS | cut -d' ' -f1)" = "$SUMS"
+          test "$(cat kit/SOURCE-COMMIT)" = "$GITHUB_SHA"
+          (cd kit/dist && sha256sum -c ../SHA256SUMS)
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            kit/dist/*
+            kit/SHA256SUMS
+
+  verify:
+    name: every file verifies against its attestation, and a one-byte copy does not
+    needs: attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kit-${{ inputs.distribution }}
+          path: kit
+      - name: Verify in both directions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          count=0
+          for file in kit/dist/* kit/SHA256SUMS; do
+            gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER_WORKFLOW"
+            cp "$file" "$RUNNER_TEMP/copy"
+            printf '\0' >> "$RUNNER_TEMP/copy"
+            if gh attestation verify "$RUNNER_TEMP/copy" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER_WORKFLOW"; then
+              echo "::error::a copy of $file with one byte appended verified"
+              exit 1
+            fi
+            count=$((count + 1))
+          done
+          test "$count" -eq 3
+          echo "$count of 3 files verified; every altered copy refused" >> "$GITHUB_STEP_SUMMARY"
+
+  release-assets:
+    name: upload to the GitHub release and verify what it serves
+    needs: [build, verify]
+    if: inputs.release-tag != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kit-${{ inputs.distribution }}
+          path: kit
+      - name: Upload the files the build wrote
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null
+          gh release upload "$TAG" kit/dist/* kit/SHA256SUMS --repo "$GITHUB_REPOSITORY"
+      - name: The release serves the same bytes, and each verifies
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release-tag }}
+          SUMS: ${{ needs.build.outputs.sums }}
+        run: |
+          set -euo pipefail
+          mkdir served
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir served --pattern '*.whl' --pattern '*.tar.gz' --pattern SHA256SUMS
+          test "$(sha256sum served/SHA256SUMS | cut -d' ' -f1)" = "$SUMS"
+          (cd served && sha256sum -c SHA256SUMS)
+          for file in served/*; do
+            gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER_WORKFLOW"
+          done
