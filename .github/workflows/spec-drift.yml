@@ -1,0 +1,55 @@
+name: spec-drift
+
+# Reusable. A family repository calls it from its batch CI:
+#
+#   spec-drift:
+#     uses: probityai/.github/.github/workflows/spec-drift.yml@<commit>
+#
+# It checks the caller out at the commit under test and every other family
+# repository at its default branch, then runs scripts/spec_drift.py with the
+# checks in spec-drift.toml. A finding fails the run when it sits in the
+# caller's files or when the caller is the home of the identifier (the place
+# the fix goes); every other finding is listed in the job summary. The checks
+# are read from this repository's main branch on purpose, so a new check
+# reaches every caller on its next run without a pin bump in each.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  spec-drift:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the caller at the commit under test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: self
+          persist-credentials: false
+      - name: Check out the checks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: probityai/.github
+          ref: main
+          path: checks
+          persist-credentials: false
+      - name: Check out the rest of the family at its default branch
+        run: |
+          set -euo pipefail
+          python3 -c 'import sys, tomllib; [print(r, d) for r, d in tomllib.load(open(sys.argv[1], "rb"))["family"].items()]' \
+            checks/spec-drift.toml > family.txt
+          grep -q -x -F "$GITHUB_REPOSITORY $(awk -v r="$GITHUB_REPOSITORY" '$1 == r {print $2}' family.txt)" family.txt \
+            || { echo "::error::$GITHUB_REPOSITORY is not in spec-drift.toml [family]"; exit 1; }
+          mkdir family
+          while read -r repo directory; do
+            [ "$repo" = "$GITHUB_REPOSITORY" ] && continue
+            git clone --depth 1 --quiet "https://github.com/$repo.git" "family/$directory"
+          done < family.txt
+          wc -l < family.txt
+      - name: Names one repository uses are defined by the repository they belong to
+        run: >
+          python3 checks/scripts/spec_drift.py --self self --self-repo "$GITHUB_REPOSITORY"
+          --family family --config checks/spec-drift.toml --summary "$GITHUB_STEP_SUMMARY"
