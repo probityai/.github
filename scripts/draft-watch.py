@@ -54,8 +54,9 @@ DEFAULT_TITLE = "[draft-watch] Internet-Draft state"
 MARKER = re.compile(r"<!-- draft-watch:signature=([0-9a-f]+) -->")
 SLUG = re.compile(r"^draft-[a-z0-9]+(?:-[a-z0-9]+)+$")
 REV = re.compile(r"^\d{2}$")
-# A draft named with its revision, as files cite them: draft-<words>-NN, not followed by more name.
-NAMED = re.compile(r"\b(draft-[a-z0-9]+(?:-[a-z0-9]+)*?)-(\d{2})(?![a-z0-9-]*[a-z])")
+# A draft named with its revision, as files cite them: draft-<author>-<words>-NN, not followed by
+# more name. At least two words follow `draft-`, so a shorthand like "draft-bu-00" is not a name.
+NAMED = re.compile(r"\b(draft-[a-z0-9]+(?:-[a-z0-9]+)+?)-(\d{2})(?![a-z0-9-]*[a-z])")
 STATE_PRIORITY = ("rfc", "replaced", "withdrawn", "expired", "active")
 ENDED = {"rfc", "replaced", "expired", "withdrawn"}
 

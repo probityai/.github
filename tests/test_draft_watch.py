@@ -97,7 +97,7 @@ class Coverage(unittest.TestCase):
         text = (
             "see draft-acme-widget-02 and https://www.ietf.org/archive/id/draft-x-y-time-anchor-08.txt; "
             "draft-ietf-oauth-v2-1 has no revision, draft-a-b-25-tail-03 keeps its digits, "
-            "and draft-gone-thing is named bare"
+            "draft-gone-thing is named bare, and draft-bu-00 is a shorthand"
         )
         self.assertEqual(
             dw.named_drafts(text),
