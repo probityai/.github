@@ -11,6 +11,7 @@ from __future__ import annotations
 import http.server
 import importlib.util
 import io
+import os
 import shutil
 import subprocess
 import sys
@@ -174,10 +175,13 @@ class PushedBranch(unittest.TestCase):
         self.base = self.git(self.root, "rev-parse", "--abbrev-ref", "HEAD")
         self.git(self.root, "push", "-q", self.url, "HEAD:refs/heads/main")
 
-    def bump(self, branch: str) -> str:
+    def bump(self, branch: str, when: str = "2026-01-01T00:00:00Z") -> str:
+        """Commit the bump at a fixed time; two bumps in the same second are otherwise one commit."""
         (self.root / "version-pins.toml").write_text("a = 2\n")
         self.git(self.root, "checkout", "-q", "-B", branch)
-        self.git(self.root, "commit", "-qam", "bump")
+        env = {**os.environ, "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when}
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam",
+                        "bump"], check=True, capture_output=True, env=env)
         return self.git(self.root, "rev-parse", "HEAD")
 
     def push(self, branch: str) -> subprocess.CompletedProcess:
@@ -189,7 +193,7 @@ class PushedBranch(unittest.TestCase):
         self.assertEqual(self.push("pin-refresh/x").returncode, 0)
         self.git(self.root, "checkout", "-q", self.base)
         self.git(self.root, "branch", "-q", "-D", "pin-refresh/x")
-        again = self.bump("pin-refresh/x")
+        again = self.bump("pin-refresh/x", when="2026-01-02T00:00:00Z")
         self.assertNotEqual(first, again)
         with redirect_stdout(io.StringIO()):
             got = pr.reuse_pushed_branch(self.url, self.root, "pin-refresh/x", again)
@@ -205,7 +209,7 @@ class PushedBranch(unittest.TestCase):
         self.git(self.root, "commit", "-qam", "main moved")
         self.git(self.root, "push", "-q", self.url, "HEAD:refs/heads/main")
         self.git(self.root, "branch", "-q", "-D", "pin-refresh/x")
-        fresh = self.bump("pin-refresh/x")
+        fresh = self.bump("pin-refresh/x", when="2026-01-02T00:00:00Z")
         tree = self.git(self.root, "rev-parse", "HEAD^{tree}")
         self.assertNotEqual(self.push("pin-refresh/x").returncode, 0, "the plain push must be refused here")
         with redirect_stdout(io.StringIO()):
