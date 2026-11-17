@@ -8,14 +8,14 @@ description: >-
 
 inputs:
   command:
-    description: "check (offline, exits 1 on an uncovered draft) or watch (network, informational)"
+    description: "check (offline, exits 1 on an uncovered draft, 2 on no or unreadable file) or watch (network, exits 3 when a pin is unread)"
     required: true
   config:
     description: "path to the pin list"
     required: false
     default: ".github/draft-tracking.json"
   require-pinned:
-    description: "with check: space-separated files or globs whose revision-named drafts must each be pinned; a glob that matches nothing fails"
+    description: "with check (required there): space-separated files or globs (** crosses directories) whose revision-named drafts must each be pinned; a glob that matches nothing fails"
     required: false
     default: ""
   token:
@@ -38,15 +38,19 @@ runs:
         case "$COMMAND" in
           check)
             # Word-split and glob-expand on purpose; without nullglob a glob that matches
-            # nothing stays literal and the script refuses it as a missing file.
+            # nothing stays literal and the script refuses it as a missing file. globstar
+            # makes `**` cross directories; without it `a/**/b` silently means `a/*/b`.
+            # An empty input reaches the script as no file, which it refuses.
+            shopt -s globstar
             # shellcheck disable=SC2206
             files=($REQUIRE)
-            python3 -B "$TOOL" check --config "$CONFIG" --require-pinned "${files[@]}" ;;
+            python3 -I -B "$TOOL" check --config "$CONFIG" --require-pinned "${files[@]}" ;;
           watch)
+            # Exits 3 when a pin could not be read, so a run that read nothing is never green.
             if [ -n "$GH_TOKEN" ]; then
-              python3 -B "$TOOL" watch --config "$CONFIG" --manage-issue
+              python3 -I -B "$TOOL" watch --config "$CONFIG" --manage-issue
             else
-              python3 -B "$TOOL" watch --config "$CONFIG"
+              python3 -I -B "$TOOL" watch --config "$CONFIG"
             fi ;;
           *) echo "unknown command: $COMMAND" >&2; exit 2 ;;
         esac
