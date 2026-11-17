@@ -27,6 +27,9 @@ The config, .github/draft-tracking.json by default:
 
 `author_person_id` and `watched_keywords` are optional and go together: they sweep that
 author's other active drafts for a successor filed without a `replaces` relation.
+`unwatched_sha256` (optional) lists the SHA-256 hex digests of draft names a scanned file may
+cite without a pin, with `unwatched_why`; a digest, not the name, so the config does not
+repeat a name the repository has decided not to follow.
 Bump `known_rev` (and `slug` on a rename) in the pull request that brings the repository
 in line with the new revision; until then the issue stays open and says what moved.
 Exit status: 0 done, 1 a `check` finding, 2 the config is missing or invalid.
@@ -98,6 +101,11 @@ class Reading:
 
 
 def load_config(path: Path) -> tuple[str, list[Pin]]:
+    title, pins, _ = load_config_full(path)
+    return title, pins
+
+
+def load_config_full(path: Path) -> tuple[str, list[Pin], frozenset[str]]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -132,7 +140,15 @@ def load_config(path: Path) -> tuple[str, list[Pin]]:
         if not isinstance(words, list) or not all(isinstance(w, str) and w for w in words):
             raise ConfigError(f"{where}: `watched_keywords` must be a list of strings")
         pins.append(Pin(slug, rev, why, author, tuple(w.lower() for w in words)))
-    return title, pins
+    skip = data.get("unwatched_sha256", [])
+    if not isinstance(skip, list) or not all(isinstance(h, str) and re.fullmatch(r"[0-9a-f]{64}", h) for h in skip):
+        raise ConfigError(f"{path}: `unwatched_sha256` must be a list of lowercase SHA-256 hex digests")
+    if skip and not (isinstance(data.get("unwatched_why"), str) and data["unwatched_why"].strip()):
+        raise ConfigError(f"{path}: `unwatched_sha256` needs `unwatched_why`")
+    pinned_digests = {hashlib.sha256(p.slug.encode()).hexdigest() for p in pins}
+    if pinned_digests & set(skip):
+        raise ConfigError(f"{path}: a draft is both pinned and listed in `unwatched_sha256`")
+    return title, pins, frozenset(skip)
 
 
 def named_drafts(text: str) -> set[str]:
@@ -140,12 +156,13 @@ def named_drafts(text: str) -> set[str]:
     return {m.group(1) for m in NAMED.finditer(text)}
 
 
-def uncovered(pins: list[Pin], files: list[Path]) -> list[str]:
+def uncovered(pins: list[Pin], files: list[Path], unwatched: frozenset[str] = frozenset()) -> list[str]:
     pinned = {p.slug for p in pins}
     out = []
     for f in files:
         for slug in sorted(named_drafts(f.read_text(encoding="utf-8")) - pinned):
-            out.append(f"{f}: names {slug} and no pin in the config covers it")
+            if hashlib.sha256(slug.encode()).hexdigest() not in unwatched:
+                out.append(f"{f}: names {slug} and no pin in the config covers it")
     return out
 
 
@@ -295,8 +312,8 @@ def manage_issue(repo: str, title: str, readings: list[Reading]) -> str:
     return f"updated issue #{number}"
 
 
-def cmd_check(pins: list[Pin], files: list[Path]) -> int:
-    findings = uncovered(pins, files)
+def cmd_check(pins: list[Pin], files: list[Path], unwatched: frozenset[str] = frozenset()) -> int:
+    findings = uncovered(pins, files, unwatched)
     for f in findings:
         print(f"::error::{f}")
     print(f"draft-watch check: {len(pins)} pins; {len(files)} files scanned; {len(findings)} uncovered")
@@ -338,7 +355,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY"))
     a = ap.parse_args(argv)
     try:
-        title, pins = load_config(a.config)
+        title, pins, unwatched = load_config_full(a.config)
     except ConfigError as exc:
         print(f"::error::{exc}")
         return 2
@@ -347,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
         if missing:
             print(f"::error::--require-pinned names files that do not exist: {', '.join(map(str, missing))}")
             return 2
-        return cmd_check(pins, a.require_pinned)
+        return cmd_check(pins, a.require_pinned, unwatched)
     return cmd_watch(title, pins, a.manage_issue, a.repo)
 
 

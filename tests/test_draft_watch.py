@@ -118,6 +118,22 @@ class Coverage(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(dw.main(["check", "--config", str(cfg), "--require-pinned", str(f)]), 0)
 
+    def test_unwatched_digest_covers_without_naming(self) -> None:
+        import hashlib
+
+        digest = hashlib.sha256(b"draft-other-thing").hexdigest()
+        with tempfile.TemporaryDirectory() as d:
+            cfg = config(Path(d), [PIN], unwatched_sha256=[digest], unwatched_why="not followed here")
+            self.assertNotIn("draft-other-thing", cfg.read_text(encoding="utf-8"))
+            f = Path(d) / "m.json"
+            f.write_text('"draft-acme-widget-02 draft-other-thing-00"', encoding="utf-8")
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(dw.main(["check", "--config", str(cfg), "--require-pinned", str(f)]), 0)
+            for bad in ({"unwatched_sha256": [digest]}, {"unwatched_sha256": ["XYZ"], "unwatched_why": "w"},
+                        {"unwatched_sha256": [hashlib.sha256(b"draft-acme-widget").hexdigest()], "unwatched_why": "w"}):
+                with self.subTest(bad=bad), self.assertRaises(dw.ConfigError):
+                    dw.load_config(config(Path(d), [PIN], **bad))
+
     def test_check_refuses_a_missing_file(self) -> None:
         with tempfile.TemporaryDirectory() as d, redirect_stdout(io.StringIO()):
             cfg = config(Path(d), [PIN])
