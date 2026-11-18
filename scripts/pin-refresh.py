@@ -276,6 +276,8 @@ def newest_run_after(runs: list[dict], sha: str, baseline: int, event: str) -> i
 
 
 HELD = "action_required"
+NEVER_RAN = "startup_failure"
+RED = ("failure", "cancelled", "timed_out")
 
 
 def pull_request_run(runs: list[dict], sha: str) -> tuple[bool, str]:
@@ -292,6 +294,9 @@ def pull_request_run(runs: list[dict], sha: str) -> tuple[bool, str]:
     if HELD in (newest.get("status"), newest.get("conclusion")):
         return False, (f"pull_request run {rid} on {sha[:12]} is held as {HELD}: the token that opened the"
                        " pull request starts no workflow (the Actions token); give the action an App")
+    if newest.get("conclusion") == NEVER_RAN:
+        # The workflow file did not load (a parse or permission error): GitHub made the run and ran no job.
+        return False, f"pull_request run {rid} on {sha[:12]} ended as {NEVER_RAN}: the workflow never ran a job"
     return True, f"pull_request run {rid} on {sha[:12]} ({newest.get('status')} {newest.get('conclusion') or ''})".rstrip()
 
 
@@ -571,9 +576,27 @@ def hand_to_repository(repo: str, base: str, number: int, branch: str, sha: str,
         print(f"pin-refresh: #{number} has no started pull_request run for {len(missing)} of {len(ci)} workflows",
               flush=True)
         return 1
+    red = red_pull_request_runs(repo, branch, sha, ci)
+    if red:
+        # Auto-merge would wait on a red check for good while every hourly run stayed green.
+        for line in red:
+            print(f"RED {line}", flush=True)
+        print(f"pin-refresh: #{number} is red on {sha[:12]}; not handing it to auto-merge", flush=True)
+        return 1
     auto_merge(repo, base, number, sha)
     print(f"AUTO-MERGE #{number} at {sha}: the branch rules and merge queue land it", flush=True)
     return 0
+
+
+def red_pull_request_runs(repo: str, branch: str, sha: str, ci: list[str]) -> list[str]:
+    """Each --ci workflow whose newest pull_request run on `sha` finished red."""
+    red = []
+    for wf in ci:
+        prs = [r for r in list_runs(repo, wf, branch) if r["headSha"] == sha and r.get("event") == "pull_request"]
+        newest = max(prs, key=lambda r: r["databaseId"]) if prs else None
+        if newest and newest.get("status") == "completed" and newest.get("conclusion") in RED:
+            red.append(f"{wf}: pull_request run {newest['databaseId']} on {sha[:12]} {newest['conclusion']}")
+    return red
 
 
 def main(argv: list[str] | None = None) -> int:

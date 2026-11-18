@@ -398,6 +398,14 @@ class GitHubDecisions(unittest.TestCase):
         self.assertFalse(started)
         self.assertIn("no pull_request run", why)
 
+    def test_a_run_whose_workflow_never_loaded_did_not_start(self):
+        runs = [{"databaseId": 6, "headSha": "abc", "event": "pull_request", "status": "completed",
+                 "conclusion": "startup_failure"}]
+        started, why = pr.pull_request_run(runs, "abc")
+        self.assertFalse(started)
+        self.assertIn("startup_failure", why)
+        self.assertNotIn(pr.HELD, why)  # not held, so the App path does not push it again
+
     def test_the_newest_pull_request_run_decides(self):
         runs = [{"databaseId": 9, "headSha": "abc", "event": "pull_request", "status": "completed",
                  "conclusion": "success"},
@@ -472,6 +480,7 @@ class AppPath(unittest.TestCase):
     def test_a_started_run_turns_on_auto_merge_and_dispatches_nothing(self):
         calls = []
         with mock.patch.object(pr, "await_pull_request_runs", return_value=[]), \
+                mock.patch.object(pr, "list_runs", return_value=[]), \
                 mock.patch.object(pr, "auto_merge", side_effect=lambda *a: calls.append(a)), \
                 mock.patch.object(pr, "run") as run, redirect_stdout(io.StringIO()):
             code = pr.hand_to_repository("o/r", "main", 7, "pin-refresh/x", "h1", ["ci.yml"])
@@ -492,6 +501,7 @@ class AppPath(unittest.TestCase):
         answers = [["ci.yml: pull_request run 5 on h1 is held as action_required"], []]
         calls = []
         with mock.patch.object(pr, "await_pull_request_runs", side_effect=lambda *a, **k: answers.pop(0)), \
+                mock.patch.object(pr, "list_runs", return_value=[]), \
                 mock.patch.object(pr, "restart_held_head", return_value="h2") as restart, \
                 mock.patch.object(pr, "auto_merge", side_effect=lambda *a: calls.append(a)), \
                 mock.patch.object(pr, "run"), redirect_stdout(io.StringIO()):
@@ -518,6 +528,18 @@ class AppPath(unittest.TestCase):
             code = pr.hand_to_repository("o/r", "main", 7, "pin-refresh/x", "h1", ["ci.yml"], root=Path("."))
         self.assertEqual(code, 1)
         restart.assert_not_called()
+
+    def test_a_red_head_is_not_handed_to_auto_merge(self):
+        runs = [{"databaseId": 8, "headSha": "h1", "event": "pull_request", "status": "completed",
+                 "conclusion": "failure"}]
+        with mock.patch.object(pr, "await_pull_request_runs", return_value=[]), \
+                mock.patch.object(pr, "list_runs", return_value=runs), \
+                mock.patch.object(pr, "auto_merge") as merge, mock.patch.object(pr, "run"), \
+                redirect_stdout(io.StringIO()) as out:
+            code = pr.hand_to_repository("o/r", "main", 7, "pin-refresh/x", "h1", ["ci.yml"], root=Path("."))
+        self.assertEqual(code, 1)
+        merge.assert_not_called()
+        self.assertIn("RED ci.yml: pull_request run 8 on h1 failure", out.getvalue())
 
     def test_auto_merge_is_not_asked_twice(self):
         with mock.patch.object(pr, "gh_json", return_value={"autoMergeRequest": {"enabledAt": "x"}}), \
