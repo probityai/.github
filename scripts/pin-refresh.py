@@ -20,8 +20,10 @@ because the rewrite reads the same exemptions as the check ([scan] historical,
 move to its lock and `brew update-python-resources` regenerates its resource blocks.
 Files under .github/workflows are put back: the token this runs with may not push
 them, and Dependabot owns the Action pins there. If nothing changed it stops. Else it
-commits on a branch named after the change, opens a pull request (closing any older
-pin-refresh pull request it supersedes), runs each --ci workflow on that branch,
+commits on a branch named after the pin move (files the calling workflow wrote before
+this ran, such as download badges, ride along and are named in the pull request, but never
+name the branch), opens a pull request (closing any older pin-refresh pull request of this
+repository it supersedes; a fork's pull request is never touched), runs each --ci workflow on that branch,
 waits, and merges only when every run concluded success. A run that fails leaves the
 pull request open with the failing run named, and this exits 1, so the workflow that
 called it turns red.
@@ -55,7 +57,12 @@ probityai/probity#288, probityai/agent-evidence-vectors#530), so the pull reques
 enqueued and each --ci workflow is dispatched on the queue's own gh-readonly-queue ref when
 no run of it reached that commit. This path stays for a repository with no App: it needs
 no secret, at the cost of a job that waits up to two CI runs and a pull request whose own
-run never starts.
+run never starts. Measured against that: on probityai/probity (ruleset requiring ci-ok from
+GitHub Actions, and a merge queue) run 44196485175 pushed, its dispatched ci.yml run
+44196623365 passed with ci-ok on the head, and the enqueue was still refused with "Required
+status check \"ci-ok\" is expected": the held pull_request suite was the newest Actions suite
+on that commit, and neither the pull request's nor the commit's check rollup listed the
+dispatched run. Where a required check also runs on pull_request, give the action an App.
 
 --verify-pr N changes nothing: it reads pull request N's head and exits 0 only when each
 --ci workflow has a pull_request run there that GitHub did not hold for approval.
@@ -515,7 +522,7 @@ def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], t
     for old in existing:
         if old["headRefName"] != branch:
             run("gh", "pr", "close", str(old["number"]), "-R", repo, "--delete-branch",
-                "--comment", f"Superseded by #{number}, which moves the same pins to newer releases.", check=False)
+                "--comment", f"Superseded by #{number}, the refresh of the current releases and base.", check=False)
     if pr_events:
         return hand_to_repository(repo, base, number, branch, sha, ci, root=root)
     results = [(wf, *dispatch_and_wait(repo, wf, branch, sha, timeout_s)) for wf in ci]
