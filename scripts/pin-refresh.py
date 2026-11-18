@@ -20,8 +20,10 @@ because the rewrite reads the same exemptions as the check ([scan] historical,
 move to its lock and `brew update-python-resources` regenerates its resource blocks.
 Files under .github/workflows are put back: the token this runs with may not push
 them, and Dependabot owns the Action pins there. If nothing changed it stops. Else it
-commits on a branch named after the change, opens a pull request (closing any older
-pin-refresh pull request it supersedes), runs each --ci workflow on that branch,
+commits on a branch named after the pin move (files the calling workflow wrote before
+this ran, such as download badges, ride along and are named in the pull request, but never
+name the branch), opens a pull request (closing any older pin-refresh pull request of this
+repository it supersedes; a fork's pull request is never touched), runs each --ci workflow on that branch,
 waits, and merges only when every run concluded success. A run that fails leaves the
 pull request open with the failing run named, and this exits 1, so the workflow that
 called it turns red.
@@ -55,7 +57,12 @@ probityai/probity#288, probityai/agent-evidence-vectors#530), so the pull reques
 enqueued and each --ci workflow is dispatched on the queue's own gh-readonly-queue ref when
 no run of it reached that commit. This path stays for a repository with no App: it needs
 no secret, at the cost of a job that waits up to two CI runs and a pull request whose own
-run never starts.
+run never starts. Measured against that: on probityai/probity (ruleset requiring ci-ok from
+GitHub Actions, and a merge queue) run 44196485175 pushed, its dispatched ci.yml run
+44196623365 passed with ci-ok on the head, and the enqueue was still refused with "Required
+status check \"ci-ok\" is expected": the held pull_request suite was the newest Actions suite
+on that commit, and neither the pull request's nor the commit's check rollup listed the
+dispatched run. Where a required check also runs on pull_request, give the action an App.
 
 --verify-pr N changes nothing: it reads pull request N's head and exits 0 only when each
 --ci workflow has a pull_request run there that GitHub did not hold for approval.
@@ -183,9 +190,66 @@ def restore_workflows(root: Path) -> list[str]:
     return changed
 
 
-def branch_for(root: Path) -> str:
-    diff = run("git", "diff", "--binary", cwd=root, quiet=True)
+def changed_paths(root: Path) -> list[str]:
+    """Every path the working tree changes against HEAD, untracked files included."""
+    out = run("git", "status", "--porcelain=v1", "-z", "--untracked-files=all", cwd=root, quiet=True)
+    fields = out.split("\0")
+    paths: list[str] = []
+    i = 0
+    while i < len(fields):
+        entry = fields[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        paths.append(entry[3:])
+        if entry[0] in "RC":  # a rename or copy names its source in the next field
+            i += 1
+    return sorted(set(paths))
+
+
+CARRIED_BRANCH = BRANCH_PREFIX + "carried"
+
+
+def branch_for(root: Path, moved: list[str]) -> str:
+    """Named after the pin move alone, so a file the caller rewrites each run never renames it.
+
+    The calling workflow may change files before this runs (probityai/probity writes its
+    download badges). Those ride along, but when the name hashed the whole tree, each new
+    download count renamed the branch and closed the pull request before it could land:
+    fifteen bump pull requests in ten days, two merged, both by hand (probityai/probity
+    #279 to #349). A run that moved no pin and carries only such files uses one fixed branch,
+    which the next run moves forward (reuse_pushed_branch).
+    """
+    if not moved:
+        return CARRIED_BRANCH
+    diff = run("git", "diff", "--binary", "HEAD", "--", *moved, cwd=root, quiet=True)
     return BRANCH_PREFIX + hashlib.sha256(diff.encode()).hexdigest()[:12]
+
+
+def describe(notes: list[str], moved: list[str], carried: list[str]) -> tuple[str, str]:
+    """(title, body) that say what this pull request changes, and nothing it does not.
+
+    Until 17 Nov 2026 every pull request said "The family released since these pins were set",
+    including probityai/probity#349, whose only files were download badges the calling
+    workflow wrote.
+    """
+    lines = [f"- {n}" for n in notes]
+    if not notes:
+        lines += [f"- {m}: rewritten to the version its lock names" for m in moved]
+    lines += [f"- {c}: written by the calling workflow before the refresh ran" for c in carried]
+    if notes:
+        title = "chore(pins): move family pins to the newest releases"
+        lead = ("The family released since these pins were set. This moves each lock, the pages it holds"
+                " and any formula, and merges when every check is green.")
+    elif moved:
+        title = "chore(pins): bring pages to the versions their locks name"
+        lead = ("No lock moved; these pages named another version than their lock. This rewrites them and"
+                " merges when every check is green.")
+    else:
+        title = "chore: refresh the files the pin-refresh workflow writes"
+        lead = ("No family pin moved. This carries only the files the calling workflow wrote before the"
+                " refresh ran, and merges when every check is green.")
+    return title, lead + "\n\n" + "\n".join(lines)
 
 
 # ---- GitHub ---------------------------------------------------------------------------
@@ -196,8 +260,14 @@ def gh_json(*args: str) -> object:
 
 
 def open_pin_prs(repo: str) -> list[dict]:
-    prs = gh_json("pr", "list", "-R", repo, "--state", "open", "--json", "number,headRefName", "--limit", "100")
-    return [p for p in prs if p["headRefName"].startswith(BRANCH_PREFIX)]
+    """Open pull requests from this repository's own pin-refresh branches.
+
+    A fork's branch can carry the same name; that pull request is someone else's, and this
+    must never close it as superseded or take its number as its own.
+    """
+    prs = gh_json("pr", "list", "-R", repo, "--state", "open", "--json", "number,headRefName,isCrossRepository",
+                  "--limit", "100")
+    return [p for p in prs if p["headRefName"].startswith(BRANCH_PREFIX) and p.get("isCrossRepository") is False]
 
 
 def newest_run_after(runs: list[dict], sha: str, baseline: int, event: str) -> int | None:
@@ -213,6 +283,8 @@ def newest_run_after(runs: list[dict], sha: str, baseline: int, event: str) -> i
 
 
 HELD = "action_required"
+NEVER_RAN = "startup_failure"
+RED = ("failure", "cancelled", "timed_out")
 
 
 def pull_request_run(runs: list[dict], sha: str) -> tuple[bool, str]:
@@ -229,6 +301,9 @@ def pull_request_run(runs: list[dict], sha: str) -> tuple[bool, str]:
     if HELD in (newest.get("status"), newest.get("conclusion")):
         return False, (f"pull_request run {rid} on {sha[:12]} is held as {HELD}: the token that opened the"
                        " pull request starts no workflow (the Actions token); give the action an App")
+    if newest.get("conclusion") == NEVER_RAN:
+        # The workflow file did not load (a parse or permission error): GitHub made the run and ran no job.
+        return False, f"pull_request run {rid} on {sha[:12]} ended as {NEVER_RAN}: the workflow never ran a job"
     return True, f"pull_request run {rid} on {sha[:12]} ({newest.get('status')} {newest.get('conclusion') or ''})".rstrip()
 
 
@@ -319,8 +394,17 @@ def pr_queue_state(repo: str, number: int) -> tuple[str, bool]:
 
 def land_through_queue(repo: str, base: str, number: int, sha: str, ci: list[str], timeout_s: int,
                        grace_s: int = 180) -> tuple[bool, str]:
-    """Enqueue, make sure every --ci workflow runs on the merge group, and wait for the merge."""
-    enqueue(repo, number, sha)
+    """Enqueue, make sure every --ci workflow runs on the merge group, and wait for the merge.
+
+    GitHub refusing the enqueue is a refused merge, not a command that could not run: it is
+    reported on the pull request like a failed check (probityai/probity run 44196485175 waited
+    41 minutes, was refused with "Required status check \"ci-ok\" is expected" and exited 2
+    with nothing on #349).
+    """
+    try:
+        enqueue(repo, number, sha)
+    except Failed as exc:
+        return False, "GitHub refused to queue it: " + re.sub(r"^.*? exited \d+: ", "", str(exc), flags=re.S)
     print(f"QUEUED #{number} at {sha}", flush=True)
     deadline = time.monotonic() + timeout_s
     served: set[str] = set()
@@ -413,32 +497,34 @@ def reuse_pushed_branch(url: str, root: Path, branch: str, sha: str) -> str:
 
 
 def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], timeout_s: int,
-            pr_events: bool = False) -> int:
-    branch = branch_for(root)
+            pr_events: bool = False, moved: list[str] | None = None, carried: list[str] | None = None) -> int:
+    moved = moved if moved is not None else changed_paths(root)
+    carried = carried or []
+    branch = branch_for(root, moved)
+    title, body = describe(notes, moved, carried)
     existing = open_pin_prs(repo)
     mine = [p for p in existing if p["headRefName"] == branch]
     if pr_events:
         reap_stale_branches(repo, root, {p["headRefName"] for p in existing}, branch)
     run("git", "checkout", "-B", branch, cwd=root)
-    run("git", "-c", f"user.name={BOT[0]}", "-c", f"user.email={BOT[1]}", "commit", "-a", "-s", "-q",
-        "-m", "chore(pins): move family pins to the newest releases", "-m", "\n".join(notes), cwd=root)
+    run("git", "add", "-A", "--", *moved, *carried, cwd=root)
+    run("git", "-c", f"user.name={BOT[0]}", "-c", f"user.email={BOT[1]}", "commit", "-s", "-q",
+        "-m", title, "-m", body.split("\n\n", 1)[1], cwd=root)
     sha = run("git", "rev-parse", "HEAD", cwd=root, quiet=True).strip()
     sha = reuse_pushed_branch(f"https://github.com/{repo}.git", root, branch, sha)
     run("git", "push", f"https://github.com/{repo}.git", f"HEAD:refs/heads/{branch}", cwd=root, env=push_env())
-    body = ("The family released since these pins were set. This moves each lock, the pages it holds"
-            " and any formula, and merges when every check is green.\n\n" + "\n".join(f"- {n}" for n in notes))
     if mine:
         number = mine[0]["number"]
     else:
         url = run("gh", "pr", "create", "-R", repo, "--base", base, "--head", branch,
-                  "--title", "chore(pins): move family pins to the newest releases", "--body", body).strip()
+                  "--title", title, "--body", body).strip()
         number = int(url.rstrip("/").rsplit("/", 1)[1])
     for old in existing:
         if old["headRefName"] != branch:
             run("gh", "pr", "close", str(old["number"]), "-R", repo, "--delete-branch",
-                "--comment", f"Superseded by #{number}, which moves the same pins to newer releases.", check=False)
+                "--comment", f"Superseded by #{number}, the refresh of the current releases and base.", check=False)
     if pr_events:
-        return hand_to_repository(repo, base, number, branch, sha, ci)
+        return hand_to_repository(repo, base, number, branch, sha, ci, root=root)
     results = [(wf, *dispatch_and_wait(repo, wf, branch, sha, timeout_s)) for wf in ci]
     for wf, conclusion, url in results:
         print(f"CI {wf}: {conclusion} {url}", flush=True)
@@ -462,9 +548,34 @@ def publish(repo: str, root: Path, base: str, notes: list[str], ci: list[str], t
     return 0
 
 
-def hand_to_repository(repo: str, base: str, number: int, branch: str, sha: str, ci: list[str]) -> int:
+def restart_held_head(url: str, root: Path, branch: str, sha: str) -> str:
+    """Push one commit of the same tree on `sha`, so the App's push starts the pull request's runs.
+
+    A bump opened while the action ran on the Actions token has a head whose pull_request run
+    GitHub holds for approval. When the App takes over and the tree is unchanged, the run
+    reuses that very commit, the push changes nothing, no event fires, and the held run is all
+    there is: every hourly run refused the same pull request. A new commit pushed with the App
+    token is a synchronize event GitHub starts like a person's.
+    """
+    tree = run("git", "rev-parse", f"{sha}^{{tree}}", cwd=root, quiet=True).strip()
+    env = {**os.environ, "GIT_AUTHOR_NAME": BOT[0], "GIT_AUTHOR_EMAIL": BOT[1],
+           "GIT_COMMITTER_NAME": BOT[0], "GIT_COMMITTER_EMAIL": BOT[1]}
+    message = ("chore(pins): start the checks the Actions token could not\n\n"
+               f"Signed-off-by: {BOT[0]} <{BOT[1]}>")
+    fresh = run("git", "commit-tree", tree, "-p", sha, "-m", message, cwd=root, quiet=True, env=env).strip()
+    run("git", "push", url, f"{fresh}:refs/heads/{branch}", cwd=root, env=push_env())
+    return fresh
+
+
+def hand_to_repository(repo: str, base: str, number: int, branch: str, sha: str, ci: list[str],
+                       root: Path | None = None) -> int:
     """The App path: the pull request's own runs started, so auto-merge and the queue finish it."""
     missing = await_pull_request_runs(repo, branch, sha, ci, timeout_s=300)
+    if missing and root is not None and all(HELD in m for m in missing):
+        print(f"#{number}: the head {sha[:12]} was held under the Actions token; pushing it again with the App",
+              flush=True)
+        sha = restart_held_head(f"https://github.com/{repo}.git", root, branch, sha)
+        missing = await_pull_request_runs(repo, branch, sha, ci, timeout_s=300)
     if missing:
         lines = "\n".join(f"- {m}" for m in missing)
         run("gh", "pr", "comment", str(number), "-R", repo, "--body",
@@ -472,9 +583,27 @@ def hand_to_repository(repo: str, base: str, number: int, branch: str, sha: str,
         print(f"pin-refresh: #{number} has no started pull_request run for {len(missing)} of {len(ci)} workflows",
               flush=True)
         return 1
+    red = red_pull_request_runs(repo, branch, sha, ci)
+    if red:
+        # Auto-merge would wait on a red check for good while every hourly run stayed green.
+        for line in red:
+            print(f"RED {line}", flush=True)
+        print(f"pin-refresh: #{number} is red on {sha[:12]}; not handing it to auto-merge", flush=True)
+        return 1
     auto_merge(repo, base, number, sha)
     print(f"AUTO-MERGE #{number} at {sha}: the branch rules and merge queue land it", flush=True)
     return 0
+
+
+def red_pull_request_runs(repo: str, branch: str, sha: str, ci: list[str]) -> list[str]:
+    """Each --ci workflow whose newest pull_request run on `sha` finished red."""
+    red = []
+    for wf in ci:
+        prs = [r for r in list_runs(repo, wf, branch) if r["headSha"] == sha and r.get("event") == "pull_request"]
+        newest = max(prs, key=lambda r: r["databaseId"]) if prs else None
+        if newest and newest.get("status") == "completed" and newest.get("conclusion") in RED:
+            red.append(f"{wf}: pull_request run {newest['databaseId']} on {sha[:12]} {newest['conclusion']}")
+    return red
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -499,8 +628,12 @@ def main(argv: list[str] | None = None) -> int:
             if not args.repo:
                 raise Failed("no --repo and no GITHUB_REPOSITORY")
             return verify_pr(args.repo, args.verify_pr, args.ci, timeout_s=0)
+        before = set(changed_paths(root))
         notes, remaining = bump(root, args.config, args.formulas, args.tap)
         reverted = restore_workflows(root)
+        after = changed_paths(root)
+        moved = [p for p in after if p not in before]
+        carried = [p for p in after if p in before]
         for path in reverted:
             print(f"left to Dependabot (a workflow file this token may not push): {path}")
         for pin in remaining:
@@ -508,16 +641,19 @@ def main(argv: list[str] | None = None) -> int:
         if remaining:
             print(f"pin-refresh: {len(remaining)} pins remain that no move here fixes; not opening a pull request")
             return 1
-        if not run("git", "status", "--porcelain", cwd=root, quiet=True).strip():
+        if not after:
             print("pin-refresh: every pin names the newest release; nothing to do")
             return 0
-        print("pin-refresh: moved\n" + "\n".join(f"  {n}" for n in notes))
+        print("pin-refresh: moved\n" + "\n".join(f"  {n}" for n in notes or ["no family pin"]))
+        for path in carried:
+            print(f"carried (written before the refresh ran): {path}")
         if args.dry_run:
             print(run("git", "diff", "--stat", cwd=root, quiet=True))
             return 0
         if not args.repo:
             raise Failed("no --repo and no GITHUB_REPOSITORY")
-        return publish(args.repo, root, args.base, notes, args.ci, args.timeout, args.pr_events)
+        return publish(args.repo, root, args.base, notes, args.ci, args.timeout, args.pr_events,
+                       moved=moved, carried=carried)
     except Failed as exc:
         print(f"pin-refresh: could not run: {exc}", file=sys.stderr)
         return 2

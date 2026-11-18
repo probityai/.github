@@ -103,10 +103,12 @@ class LocalBump(unittest.TestCase):
 
     def test_branch_name_follows_the_change(self):
         self.dry_run()
-        first = pr.branch_for(self.root)
+        moved = pr.changed_paths(self.root)
+        first = pr.branch_for(self.root, moved)
         self.assertTrue(first.startswith("pin-refresh/"))
+        self.assertNotEqual(first, pr.CARRIED_BRANCH)
         (self.root / "README.md").write_text("changed\n")
-        self.assertNotEqual(first, pr.branch_for(self.root))
+        self.assertNotEqual(first, pr.branch_for(self.root, moved))
 
     def test_a_registry_that_does_not_answer_is_a_refusal_not_a_pass(self):
         vp = pr.load_version_pins()
@@ -220,10 +222,96 @@ class PushedBranch(unittest.TestCase):
         self.assertIn("Signed-off-by: github-actions[bot]", self.git(self.root, "log", "-1", "--format=%B", got))
         self.assertEqual(self.push("pin-refresh/x").returncode, 0)
 
+    def test_a_held_head_is_pushed_again_as_a_fast_forward_of_the_same_tree(self):
+        held = self.bump("pin-refresh/z")
+        self.assertEqual(self.push("pin-refresh/z").returncode, 0)
+        with redirect_stdout(io.StringIO()):
+            fresh = pr.restart_held_head(self.url, self.root, "pin-refresh/z", held)
+        self.assertNotEqual(fresh, held)
+        self.assertEqual(self.git(self.root, "rev-parse", f"{fresh}^1"), held)
+        self.assertEqual(self.git(self.root, "rev-parse", f"{fresh}^{{tree}}"), self.git(self.root, "rev-parse", f"{held}^{{tree}}"))
+        remote_tip = subprocess.run(["git", "--git-dir", str(self.remote), "rev-parse", "refs/heads/pin-refresh/z"],
+                                    check=True, capture_output=True, text=True).stdout.strip()
+        self.assertEqual(remote_tip, fresh)
+        self.assertIn("Signed-off-by: github-actions[bot]", self.git(self.root, "log", "-1", "--format=%B", fresh))
+
     def test_an_absent_branch_keeps_the_new_commit(self):
         fresh = self.bump("pin-refresh/y")
         with redirect_stdout(io.StringIO()):
             self.assertEqual(pr.reuse_pushed_branch(self.url, self.root, "pin-refresh/y", fresh), fresh)
+
+
+class CarriedFiles(unittest.TestCase):
+    """Files the calling workflow wrote before the refresh ride along, but never name the branch or the PR.
+
+    probityai/probity writes its download badges before the action runs. #349's four files
+    were all badges, under a title and body saying the family had released; and because the
+    whole-tree diff named the branch, each new count renamed it and closed the pull request
+    before it could land (fifteen bump pull requests from #279 to #349, two merged by hand).
+    """
+
+    def setUp(self):
+        self.root = repo({"version-pins.toml": CONFIG, "README.md": README,
+                          "assets/badges/dl.svg": "<svg>100</svg>\n"})
+        self.addCleanup(shutil.rmtree, self.root)
+        self.vp = pr.load_version_pins()
+        self.load = mock.patch.object(pr, "load_version_pins", return_value=self.vp)
+        self.load.start()
+        self.addCleanup(self.load.stop)
+
+    def main_with(self, latest: str) -> tuple[int, dict]:
+        seen: dict = {}
+
+        def fake_publish(repo_, root, base, notes, ci, timeout, pr_events, moved=None, carried=None):
+            seen.update(notes=notes, moved=moved, carried=carried, branch=pr.branch_for(root, moved),
+                        text=pr.describe(notes, moved, carried))
+            return 0
+
+        with mock.patch.object(self.vp, "registry_latest", return_value=latest), \
+                mock.patch.object(pr, "publish", side_effect=fake_publish), redirect_stdout(io.StringIO()):
+            code = pr.main(["--root", str(self.root), "--config", "version-pins.toml", "--ci", "ci.yml",
+                            "--repo", "o/r"])
+        return code, seen
+
+    def test_badges_alone_are_carried_on_one_fixed_branch_with_an_honest_title(self):
+        (self.root / "assets/badges/dl.svg").write_text("<svg>101</svg>\n")
+        (self.root / "assets/badges/new.svg").write_text("<svg>1</svg>\n")  # untracked, still carried
+        code, seen = self.main_with("0.30.0")
+        self.assertEqual(code, 0)
+        self.assertEqual(seen["moved"], [])
+        self.assertEqual(seen["carried"], ["assets/badges/dl.svg", "assets/badges/new.svg"])
+        self.assertEqual(seen["branch"], pr.CARRIED_BRANCH)
+        title, body = seen["text"]
+        self.assertNotIn("released", body)
+        self.assertNotIn("pins", title)
+        self.assertIn("assets/badges/new.svg: written by the calling workflow", body)
+
+    def test_a_new_download_count_does_not_rename_the_pin_branch(self):
+        (self.root / "assets/badges/dl.svg").write_text("<svg>101</svg>\n")
+        _, first = self.main_with("0.32.1")
+        self.assertEqual(first["moved"], ["README.md", "version-pins.toml"])
+        subprocess.run(["git", "-C", str(self.root), "checkout", "-q", "--", "README.md", "version-pins.toml"],
+                       check=True)
+        (self.root / "assets/badges/dl.svg").write_text("<svg>102</svg>\n")
+        _, second = self.main_with("0.32.1")
+        self.assertEqual(first["branch"], second["branch"])
+        self.assertNotEqual(first["branch"], pr.CARRIED_BRANCH)
+        self.assertIn("released", first["text"][1])
+        self.assertIn("assets/badges/dl.svg: written by the calling workflow", first["text"][1])
+
+    def test_nothing_written_and_nothing_moved_is_nothing_to_do(self):
+        with mock.patch.object(self.vp, "registry_latest", return_value="0.30.0"), \
+                mock.patch.object(pr, "publish") as publish, redirect_stdout(io.StringIO()) as out:
+            code = pr.main(["--root", str(self.root), "--config", "version-pins.toml", "--ci", "ci.yml",
+                            "--repo", "o/r"])
+        self.assertEqual(code, 0)
+        publish.assert_not_called()
+        self.assertIn("nothing to do", out.getvalue())
+
+    def test_changed_paths_reads_renames_and_untracked_files(self):
+        subprocess.run(["git", "-C", str(self.root), "mv", "README.md", "READ ME.md"], check=True)
+        (self.root / "x y.txt").write_text("u\n")
+        self.assertEqual(pr.changed_paths(self.root), ["READ ME.md", "x y.txt"])
 
 
 class BrewResources(unittest.TestCase):
@@ -310,6 +398,14 @@ class GitHubDecisions(unittest.TestCase):
         self.assertFalse(started)
         self.assertIn("no pull_request run", why)
 
+    def test_a_run_whose_workflow_never_loaded_did_not_start(self):
+        runs = [{"databaseId": 6, "headSha": "abc", "event": "pull_request", "status": "completed",
+                 "conclusion": "startup_failure"}]
+        started, why = pr.pull_request_run(runs, "abc")
+        self.assertFalse(started)
+        self.assertIn("startup_failure", why)
+        self.assertNotIn(pr.HELD, why)  # not held, so the App path does not push it again
+
     def test_the_newest_pull_request_run_decides(self):
         runs = [{"databaseId": 9, "headSha": "abc", "event": "pull_request", "status": "completed",
                  "conclusion": "success"},
@@ -322,6 +418,22 @@ class GitHubDecisions(unittest.TestCase):
         self.assertEqual(pr.stale_pin_branches(refs, {"pin-refresh/b2"}, keep="pin-refresh/d4"),
                          ["pin-refresh/a1", "pin-refresh/c3"])
         self.assertEqual(pr.stale_pin_branches([{"ref": "refs/heads/main"}], set(), keep=""), [])
+
+    def test_a_forks_branch_of_the_same_name_is_never_ours(self):
+        listed = [{"number": 1, "headRefName": "pin-refresh/abc", "isCrossRepository": False},
+                  {"number": 2, "headRefName": "pin-refresh/abc", "isCrossRepository": True},
+                  {"number": 3, "headRefName": "pin-refresh/x"},
+                  {"number": 4, "headRefName": "feature", "isCrossRepository": False}]
+        with mock.patch.object(pr, "gh_json", return_value=listed):
+            self.assertEqual([p["number"] for p in pr.open_pin_prs("o/r")], [1])
+
+    def test_a_refused_enqueue_is_a_refused_merge_with_its_reason(self):
+        refusal = pr.Failed('gh api graphql -f query=mutation{enqueuePullRequest} exited 1: gh: Pull request '
+                            'Required status check "ci-ok" is expected.')
+        with mock.patch.object(pr, "enqueue", side_effect=refusal), redirect_stdout(io.StringIO()):
+            merged, why = pr.land_through_queue("o/r", "main", 349, "c51f", ["ci.yml"], timeout_s=5)
+        self.assertFalse(merged)
+        self.assertEqual(why, 'GitHub refused to queue it: gh: Pull request Required status check "ci-ok" is expected.')
 
     def test_no_second_credential_is_read(self):
         source = (HERE / "pin-refresh.py").read_text(encoding="utf-8")
@@ -368,6 +480,7 @@ class AppPath(unittest.TestCase):
     def test_a_started_run_turns_on_auto_merge_and_dispatches_nothing(self):
         calls = []
         with mock.patch.object(pr, "await_pull_request_runs", return_value=[]), \
+                mock.patch.object(pr, "list_runs", return_value=[]), \
                 mock.patch.object(pr, "auto_merge", side_effect=lambda *a: calls.append(a)), \
                 mock.patch.object(pr, "run") as run, redirect_stdout(io.StringIO()):
             code = pr.hand_to_repository("o/r", "main", 7, "pin-refresh/x", "h1", ["ci.yml"])
@@ -383,6 +496,50 @@ class AppPath(unittest.TestCase):
         self.assertEqual(code, 1)
         merge.assert_not_called()
         self.assertEqual(run.call_args.args[:3], ("gh", "pr", "comment"))
+
+    def test_a_head_held_under_the_actions_token_is_pushed_again_once(self):
+        answers = [["ci.yml: pull_request run 5 on h1 is held as action_required"], []]
+        calls = []
+        with mock.patch.object(pr, "await_pull_request_runs", side_effect=lambda *a, **k: answers.pop(0)), \
+                mock.patch.object(pr, "list_runs", return_value=[]), \
+                mock.patch.object(pr, "restart_held_head", return_value="h2") as restart, \
+                mock.patch.object(pr, "auto_merge", side_effect=lambda *a: calls.append(a)), \
+                mock.patch.object(pr, "run"), redirect_stdout(io.StringIO()):
+            code = pr.hand_to_repository("o/r", "main", 7, "pin-refresh/x", "h1", ["ci.yml"], root=Path("."))
+        self.assertEqual(code, 0)
+        restart.assert_called_once_with("https://github.com/o/r.git", Path("."), "pin-refresh/x", "h1")
+        self.assertEqual(calls, [("o/r", "main", 7, "h2")])
+
+    def test_a_head_still_held_after_the_restart_is_a_refusal(self):
+        held = ["ci.yml: pull_request run 5 on h2 is held as action_required"]
+        with mock.patch.object(pr, "await_pull_request_runs", return_value=held), \
+                mock.patch.object(pr, "restart_held_head", return_value="h2") as restart, \
+                mock.patch.object(pr, "auto_merge") as merge, \
+                mock.patch.object(pr, "run"), redirect_stdout(io.StringIO()):
+            code = pr.hand_to_repository("o/r", "main", 7, "pin-refresh/x", "h1", ["ci.yml"], root=Path("."))
+        self.assertEqual(code, 1)
+        restart.assert_called_once()
+        merge.assert_not_called()
+
+    def test_a_run_that_never_appeared_is_not_restarted(self):
+        with mock.patch.object(pr, "await_pull_request_runs", return_value=["ci.yml: no pull_request run on h1"]), \
+                mock.patch.object(pr, "restart_held_head") as restart, \
+                mock.patch.object(pr, "run"), redirect_stdout(io.StringIO()):
+            code = pr.hand_to_repository("o/r", "main", 7, "pin-refresh/x", "h1", ["ci.yml"], root=Path("."))
+        self.assertEqual(code, 1)
+        restart.assert_not_called()
+
+    def test_a_red_head_is_not_handed_to_auto_merge(self):
+        runs = [{"databaseId": 8, "headSha": "h1", "event": "pull_request", "status": "completed",
+                 "conclusion": "failure"}]
+        with mock.patch.object(pr, "await_pull_request_runs", return_value=[]), \
+                mock.patch.object(pr, "list_runs", return_value=runs), \
+                mock.patch.object(pr, "auto_merge") as merge, mock.patch.object(pr, "run"), \
+                redirect_stdout(io.StringIO()) as out:
+            code = pr.hand_to_repository("o/r", "main", 7, "pin-refresh/x", "h1", ["ci.yml"], root=Path("."))
+        self.assertEqual(code, 1)
+        merge.assert_not_called()
+        self.assertIn("RED ci.yml: pull_request run 8 on h1 failure", out.getvalue())
 
     def test_auto_merge_is_not_asked_twice(self):
         with mock.patch.object(pr, "gh_json", return_value={"autoMergeRequest": {"enabledAt": "x"}}), \
