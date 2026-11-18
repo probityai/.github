@@ -207,6 +207,15 @@ jobs:
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir served --pattern '*.whl' --pattern '*.tar.gz' --pattern SHA256SUMS
           test "$(sha256sum served/SHA256SUMS | cut -d' ' -f1)" = "$SUMS"
           (cd served && sha256sum -c SHA256SUMS)
+          # sha256sum -c checks only the files SHA256SUMS lists, so a wheel or source archive
+          # the release also serves (another version's, a file uploaded by hand) passed. Every
+          # served distribution file must be one this build wrote.
+          cut -d' ' -f3- served/SHA256SUMS | sort > "$RUNNER_TEMP/listed"
+          find served -maxdepth 1 -type f \( -name '*.whl' -o -name '*.tar.gz' \) -printf '%f\n' | sort > "$RUNNER_TEMP/found"
+          if ! diff -u "$RUNNER_TEMP/listed" "$RUNNER_TEMP/found"; then
+            echo "::error::the release serves distribution files SHA256SUMS does not list, or lacks one it lists"
+            exit 1
+          fi
           for file in served/*; do
             gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER_WORKFLOW"
           done

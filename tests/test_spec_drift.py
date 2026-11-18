@@ -110,6 +110,46 @@ class SpecDriftTest(unittest.TestCase):
         write(self.config, CONFIG + '\n[[check]]\nid = "made-up"\nhome = "' + HOME + '"\ndescription = "x"\n')
         self.assertEqual(self.run_as(HOME, self.home), 2)
 
+    def test_a_name_outside_the_registry_form_is_a_finding_not_a_non_match(self):
+        # The break: the pattern stopped at the first character outside [a-z0-9-], so an
+        # uppercase name matched nothing and passed, though the Pages path is case-sensitive.
+        for name in ("Observed-Effect", "observed_effect"):
+            write(self.consumer / "docs/emit.md", f"{GITHUB_URI}{name}\n")
+            self.assertEqual(self.run_as(CONSUMER, self.consumer), 1, name)
+
+    def test_the_host_is_matched_without_case_and_with_either_scheme(self):
+        uri = GITHUB_URI.replace("https://probityai", "http://ProbityAI")
+        write(self.consumer / "docs/emit.md", f"{uri}renamed-effect\n")
+        self.assertEqual(self.run_as(CONSUMER, self.consumer), 1)
+
+    def test_a_version_is_part_of_the_type(self):
+        # The break: a predicate/v2 URI was never read, registered or not.
+        v2 = GITHUB_URI.replace("/v1/", "/v2/")
+        write(self.consumer / "docs/emit.md", f"{v2}observed-effect\n")
+        self.assertEqual(self.run_as(CONSUMER, self.consumer), 1)
+        registry = self.home / "spec/predicates/REGISTRY.md"
+        write(registry, registry.read_text(encoding="utf-8") + "\n### `predicate/v2/observed-effect`\n")
+        self.assertEqual(self.run_as(CONSUMER, self.consumer), 0)
+
+    def test_the_namespace_itself_is_not_a_type(self):
+        write(self.consumer / "docs/emit.md", f"Types live under {GITHUB_URI} and {W3ID_URI}.\n")
+        self.assertEqual(self.run_as(CONSUMER, self.consumer), 0)
+
+    def test_sentence_punctuation_after_a_uri_is_not_part_of_it(self):
+        write(self.consumer / "docs/emit.md", f"We emit {GITHUB_URI}observed-effect.\n")
+        self.assertEqual(self.run_as(CONSUMER, self.consumer), 0)
+
+    def test_a_file_that_is_not_read_is_counted_and_named(self):
+        (self.consumer / "docs").mkdir(parents=True, exist_ok=True)
+        (self.consumer / "docs/latin1.md").write_bytes(b"caf\xe9 " + f"{GITHUB_URI}renamed\n".encode())
+        summary = Path(self.tmp.name) / "summary.md"
+        args = ["--self", str(self.consumer), "--self-repo", CONSUMER, "--family", str(self.family),
+                "--config", str(self.config), "--summary", str(summary)]
+        self.assertEqual(DRIFT.main(args), 0)
+        text = summary.read_text(encoding="utf-8")
+        self.assertIn("1 scanned-suffix files not read", text)
+        self.assertIn("not read probityai/probity:docs/latin1.md (not UTF-8)", text)
+
     def test_the_committed_configuration_loads(self):
         config = DRIFT.load_config()
         self.assertEqual({check["id"] for check in config["check"]}, set(DRIFT.CHECKS))

@@ -19,7 +19,15 @@ repository it touches and fails in the one that must change.
 
 Files are scanned when their suffix is listed in ``scan.suffixes``; paths matching
 ``scan.skip`` globs (case data, vendored captures) are not, because a corpus case that names
-a wrong type URI on purpose is a test, not drift.
+a wrong type URI on purpose is a test, not drift. Each file is read once for every check. A
+file that is too large or is not UTF-8 is not read, and the count of such files is printed
+with the findings, so a file left unread is never mistaken for a file without drift.
+
+A type URI is read by its whole path segment and its version: ``predicate/v2/<name>`` must be
+registered as ``predicate/v2/<name>``, and a name with a character outside the registry's
+form (``Observed-Effect``, ``observed_effect``) is a finding, not a non-match. The host is
+matched without regard to case, as hosts are; the path is matched exactly, as the Pages site
+serves it.
 
 Exit 0 when no finding belongs to the calling repository; 1 otherwise; 2 when the
 configuration or a checkout is unreadable.
@@ -85,8 +93,10 @@ def checkouts(self_dir: Path, self_repo: str, family_dir: Path, family: dict[str
     return found
 
 
-def text_files(root: Path, scan: dict[str, Any]) -> Iterator[tuple[str, str]]:
-    """Yield (relative path, text) for every scanned file under ``root``."""
+def text_files(
+    root: Path, scan: dict[str, Any], unread: list[str] | None = None, repo: str = ""
+) -> Iterator[tuple[str, str]]:
+    """Yield (relative path, text) for every scanned file under ``root``; name each one not read in ``unread``."""
     suffixes = set(scan["suffixes"])
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.suffix not in suffixes or ".git" in path.parts:
@@ -95,17 +105,21 @@ def text_files(root: Path, scan: dict[str, Any]) -> Iterator[tuple[str, str]]:
         if any(fnmatch.fnmatch(relative, pattern) for pattern in scan["skip"]):
             continue
         if path.stat().st_size > MAX_BYTES:
+            if unread is not None:
+                unread.append(f"{repo}:{relative} (over {MAX_BYTES} bytes)")
             continue
         try:
             yield relative, path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            continue
+            if unread is not None:
+                unread.append(f"{repo}:{relative} (not UTF-8)")
 
 
 def registered_predicates(home: Path) -> set[str]:
-    """The predicate names spec/predicates/REGISTRY.md lists, defined or registered."""
+    """The ``v<N>/<name>`` types spec/predicates/REGISTRY.md lists, defined or registered."""
     text = (home / "spec" / "predicates" / "REGISTRY.md").read_text(encoding="utf-8")
-    return set(re.findall(r"^### `predicate/v1/([a-z0-9-]+)`", text, re.MULTILINE))
+    found = re.findall(r"^### `predicate/(v\d+/[a-z0-9-]+)`", text, re.MULTILINE)
+    return set(found)
 
 
 def registered_corpora(home: Path) -> set[str]:
@@ -115,14 +129,26 @@ def registered_corpora(home: Path) -> set[str]:
 
 
 def published_pages(home: Path) -> set[str]:
-    """The predicate names the w3id namespace redirects to: pages/predicate/v1/<name>/index.html."""
-    root = home / "pages" / "predicate" / "v1"
-    return {page.parent.name for page in root.glob("*/index.html")}
+    """The ``v<N>/<name>`` types the w3id namespace redirects to: pages/predicate/v<N>/<name>/index.html."""
+    root = home / "pages" / "predicate"
+    return {f"{page.parent.parent.name}/{page.parent.name}" for page in root.glob("v*/*/index.html")}
 
 
-PREDICATE_URI = re.compile(r"https://probityai\.github\.io/agent-evidence-vectors/predicate/v1/([a-z0-9-]+)")
-W3ID_URI = re.compile(r"https://w3id\.org/agent-evidence/predicate/v1/([a-z0-9-]+)")
-CORPUS_USE = re.compile(r"(?:\bcorpus:\s*|--corpus[ =])[\"']?(vectors[a-z0-9-]*)")
+# A path segment runs to whitespace, a quote, a bracket or a separator; trailing sentence
+# punctuation is dropped by ``_identifier``. Writing the segment this widely is what turns a
+# misspelt name into a finding instead of a URI the pattern does not see.
+_SEGMENT = r"([^\s\"'<>()\[\]{}`,;|\\#?]*)"
+PREDICATE_URI = re.compile(
+    r"(?i:https?://probityai\.github\.io)/agent-evidence-vectors/predicate/" + _SEGMENT
+)
+W3ID_URI = re.compile(r"(?i:https?://w3id\.org)/agent-evidence/predicate/" + _SEGMENT)
+CORPUS_USE = re.compile(r"(?:\bcorpus:\s*|--corpus[ =])[\"']?(vectors[A-Za-z0-9_.-]*)")
+TYPE_FORM = re.compile(r"v\d+/.+")
+
+
+def _identifier(raw: str) -> str:
+    """The identifier a match names: the segment without trailing sentence punctuation."""
+    return raw.rstrip(".:*_").removesuffix("/index.html").rstrip("/")
 
 CHECKS = {
     "predicate-uri-registered": (registered_predicates, PREDICATE_URI),
@@ -131,18 +157,31 @@ CHECKS = {
 }
 
 
-def run_check(check: dict[str, Any], trees: dict[str, Path], scan: dict[str, Any]) -> list[Finding]:
-    """Return every reference to an identifier the check's home does not define."""
-    definitions, pattern = CHECKS[check["id"]]
-    defined = definitions(trees[check["home"]])
+def run_checks(
+    checks: Sequence[dict[str, Any]], trees: dict[str, Path], scan: dict[str, Any], unread: list[str] | None = None
+) -> list[Finding]:
+    """Return every reference to an identifier its check's home does not define, reading each file once."""
+    plans = []
+    for check in checks:
+        definitions, pattern = CHECKS[check["id"]]
+        plans.append((check, pattern, definitions(trees[check["home"]])))
     findings = []
     for repo, tree in trees.items():
-        for relative, text in text_files(tree, scan):
+        for relative, text in text_files(tree, scan, unread, repo):
             for number, line in enumerate(text.splitlines(), start=1):
-                for match in pattern.finditer(line):
-                    if match.group(1) not in defined:
-                        findings.append(Finding(check["id"], check["home"], repo, relative, number, match.group(1)))
+                for check, pattern, defined in plans:
+                    for match in pattern.finditer(line):
+                        identifier = _identifier(match.group(1))
+                        if pattern is not CORPUS_USE and not TYPE_FORM.fullmatch(identifier):
+                            continue  # the namespace itself (``.../predicate/v1/``), not a type
+                        if identifier not in defined:
+                            findings.append(Finding(check["id"], check["home"], repo, relative, number, identifier))
     return findings
+
+
+def run_check(check: dict[str, Any], trees: dict[str, Path], scan: dict[str, Any]) -> list[Finding]:
+    """Return every reference to an identifier one check's home does not define."""
+    return run_checks([check], trees, scan)
 
 
 def owned(finding: Finding, self_repo: str) -> bool:
@@ -166,12 +205,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
         print(f"spec-drift could not run: {exc}", file=sys.stderr)
         return 2
-    findings = [finding for check in config["check"] for finding in run_check(check, trees, config["scan"])]
+    unread: list[str] = []
+    findings = run_checks(config["check"], trees, config["scan"], unread)
     mine = [finding for finding in findings if owned(finding, args.self_repo)]
     lines = [f"{len(config['check'])} checks over {len(trees)} repositories: {len(findings)} findings, "
-             f"{len(mine)} for {args.self_repo}"]
+             f"{len(mine)} for {args.self_repo}, {len(unread)} scanned-suffix files not read"]
     lines += [f"FAIL {finding.text()}" for finding in mine]
     lines += [f"elsewhere {finding.text()}" for finding in findings if finding not in mine]
+    lines += [f"not read {name}" for name in unread]
     print("\n".join(lines))
     if args.summary:
         with args.summary.open("a", encoding="utf-8") as handle:
