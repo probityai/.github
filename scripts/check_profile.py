@@ -7,6 +7,7 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -35,7 +36,10 @@ def _read_with_retry(request: Request, url: str, attempts: int = 4) -> bytes:
         except HTTPError as error:
             if error.code < 500 or attempt == attempts - 1:
                 raise
-        except URLError:
+        # A read that times out raises TimeoutError and a dropped connection raises
+        # ConnectionError or http.client.HTTPException; none of them is a URLError, and
+        # one slow pypi.org read failed run 44220207925 without a retry.
+        except (URLError, OSError, HTTPException):
             if attempt == attempts - 1:
                 raise
         time.sleep(2**attempt)
