@@ -37,7 +37,14 @@ jobs:
         env:
           REASON: ${{ inputs.reason || github.event.client_payload.release || github.event_name }}
         run: echo "pin-refresh reason $REASON"
+      # main has a merge queue, and a pull request the Actions token opens gets no
+      # pull_request run, so GitHub refuses to enqueue it ("Required status check ci-ok
+      # is expected", run 44924281403). The org App's installation token gives the pull
+      # request its own runs; until the App exists both values are empty and the action
+      # falls back to the Actions token.
       - uses: ./actions/pin-refresh
         with:
           ci: profile.yml
+          app-client-id: ${{ vars.PIN_REFRESH_APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.PIN_REFRESH_APP_PRIVATE_KEY }}
           token: ${{ github.token }}

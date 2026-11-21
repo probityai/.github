@@ -2,6 +2,8 @@
 
 import importlib.util
 import unittest
+from unittest import mock
+from urllib.error import HTTPError
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -120,6 +122,49 @@ class ProfileControls(unittest.TestCase):
         )
         traversal = nested.replace("packages/vocabulary", "../vocabulary")
         self.assertEqual(CHECK.readback_target(traversal), traversal)
+
+
+
+class ReadRetry(unittest.TestCase):
+    """A slow or dropped read is retried; a 4xx is not (run 44220207925 timed out once and failed)."""
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, limit):
+            return b"ok"
+
+    def _read(self, faults):
+        calls = []
+
+        def fake_urlopen(request, timeout):
+            calls.append(1)
+            if faults:
+                raise faults.pop(0)
+            return self._Response()
+
+        with mock.patch.object(CHECK, "urlopen", fake_urlopen), mock.patch.object(CHECK.time, "sleep"):
+            return CHECK._read_with_retry(CHECK.Request("https://pypi.org/x"), "https://pypi.org/x"), len(calls)
+
+    def test_read_timeout_is_retried(self):
+        self.assertEqual(self._read([TimeoutError("The read operation timed out")]), (b"ok", 2))
+
+    def test_dropped_connection_is_retried(self):
+        self.assertEqual(self._read([ConnectionResetError(), CHECK.HTTPException()]), (b"ok", 3))
+
+    def test_timeouts_on_every_attempt_fail(self):
+        with self.assertRaises(TimeoutError):
+            self._read([TimeoutError()] * 4)
+
+    def test_client_error_fails_at_once(self):
+        with self.assertRaises(HTTPError):
+            self._read([HTTPError("https://pypi.org/x", 404, "Not Found", {}, None)])
 
 
 if __name__ == "__main__":
