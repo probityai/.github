@@ -7,7 +7,7 @@
 For platform, security and audit teams who receive a claim about an agent run and need a decision they can replay offline.
 
 ```sh
-pip install probityai==0.1.1
+pip install probityai
 samples="$(python -c 'import importlib.resources as r; print(r.files("probity_verify") / "samples")')"
 probityai verify "$samples/case.json" --policy "$samples/policy-june.json"
 ```
@@ -23,9 +23,9 @@ Reason: selected_span_missing_from_record
 
 | Verb | What it does | Install |
 | --- | --- | --- |
-| `probityai verify` | decide a claim against pinned evidence or a DSSE envelope | `pip install probityai==0.1.1` |
-| `uvx agent-evidence-vectors` | test any verifier against the public conformance corpus | `uvx agent-evidence-vectors==0.37.1` |
-| `ratchet` | turn an observed agent failure into a guard proven by replay | `pip install probity-ratchet==0.4.0` |
+| `probityai verify` | decide a claim against pinned evidence or a DSSE envelope | `pip install probityai` |
+| `uvx agent-evidence-vectors` | test any verifier against the public conformance corpus | `uvx agent-evidence-vectors` |
+| `ratchet` | turn an observed agent failure into a guard proven by replay | `pip install probity-ratchet` |
 
 Explore retained runs or contribute one in the [Open Evidence Lab](https://probityai.github.io/agent-evidence-atlas/lab.html). Browse the task catalog in [HTML](https://probityai.github.io/agent-evidence-atlas/start.html) or [Markdown](https://probityai.github.io/agent-evidence-atlas/start.md). Read the [agent guide](https://probityai.github.io/agent-evidence-atlas/llms.txt) for commands and pinned sources.
 
@@ -50,10 +50,10 @@ Ratchet turns each observed agent failure into an executable guard.
 It proves the guard by replay against recorded history and fresh held-out runs before admitting it, and signs
 every admission decision with the
 [agent change admission predicate](https://github.com/probityai/agent-evidence-vectors/blob/main/packages/vocabulary/docs/predicates/agent-change-admission-v1.md).
-Install it with `pip install probity-ratchet==0.4.0`; its
+Install it with `pip install probity-ratchet`; its
 [README](https://github.com/probityai/probity/blob/e2164379c19cf17a00356dfbdf625a998272ac58/packages/ratchet/README.md)
 gives the commands and the recorded results.
 
 ## The standard
 
-Agent Evidence is the open standard; Probity checks and grades against it. [probityai/agent-evidence-vectors](https://github.com/probityai/agent-evidence-vectors) holds the conformance corpus, the vocabulary (`agent-evidence-vocabulary==0.9.0`), admission rules (`agent-evidence-admission==0.2.1`), the `dsse` (0.1.7) and `jcs-admit` (0.1.3) crates, and the conformance board. [probityai/probity](https://github.com/probityai/probity) holds the verifier, the `probityai` command, Ratchet, and two evidence-layer packages: the observer (`agent-evidence-observer==0.2.0`) and the MCP server (`agent-evidence-mcp==0.2.7`). Packages named `agent-evidence-*` are the neutral layer any tool can pin; packages named `probity*` are the checks built on it. Each package keeps its own version and release tag.
+Agent Evidence is the open standard; Probity checks and grades against it. [probityai/agent-evidence-vectors](https://github.com/probityai/agent-evidence-vectors) holds the conformance corpus, the vocabulary (`agent-evidence-vocabulary`), admission rules (`agent-evidence-admission`), the `dsse` and `jcs-admit` crates, and the conformance board. [probityai/probity](https://github.com/probityai/probity) holds the verifier, the `probityai` command, Ratchet, and two evidence-layer packages: the observer (`agent-evidence-observer`) and the MCP server (`agent-evidence-mcp`). Packages named `agent-evidence-*` are the neutral layer any tool can pin; packages named `probity*` are the checks built on it. Each package keeps its own version and release tag.
