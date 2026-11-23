@@ -715,6 +715,19 @@ class Unread(Exception):
     """A registry or host did not give a usable answer; nothing was established."""
 
 
+def _quota_note(exc: urllib.error.HTTPError) -> str:
+    """Say so when a 403 or 429 is a spent request quota: that is an unread answer, never a verdict."""
+    if exc.code not in (403, 429) or exc.headers is None:
+        return ""
+    remaining = exc.headers.get("x-ratelimit-remaining")
+    if remaining == "0" or exc.headers.get("retry-after"):
+        who = "the token's" if os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") else "the anonymous"
+        return f" (the request quota is spent: {who} limit)"
+    if exc.code == 403 and not (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")):
+        return " (no GITHUB_TOKEN was passed; an anonymous read shares one quota per runner address)"
+    return ""
+
+
 def fetch_json(url: str, *, missing_ok: bool = False, headers: dict[str, str] | None = None):
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
     try:
@@ -723,7 +736,7 @@ def fetch_json(url: str, *, missing_ok: bool = False, headers: dict[str, str] | 
     except urllib.error.HTTPError as exc:
         if exc.code == 404 and missing_ok:
             return None
-        raise Unread(f"{url} answered HTTP {exc.code}") from exc
+        raise Unread(f"{url} answered HTTP {exc.code}{_quota_note(exc)}") from exc
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise Unread(f"{url} gave no usable answer: {exc}") from exc
 
