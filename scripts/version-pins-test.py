@@ -397,6 +397,38 @@ class Grace(unittest.TestCase):
         with mock.patch.object(vp, "fetch_json", side_effect=fetch):
             self.assertIsNone(vp.publisher_of(e, "0.3.3"))
 
+    def test_a_403_from_the_attestations_api_is_unread_never_a_pass(self):
+        import io, urllib.error
+        e = vp.Entry(registry="pypi", name="demo", version="0.3.3", source="lock", own=True, publisher="org/repo")
+        files = {"urls": [{"filename": "demo-0.3.3.tar.gz", "digests": {"sha256": "d" * 64}}]}
+        denied = urllib.error.HTTPError("https://api.github.com/x", 403, "Forbidden", {"x-ratelimit-remaining": "0"}, io.BytesIO(b"{}"))
+
+        def urlopen(request, timeout=0):
+            url = request.full_url
+            if url.endswith("/json"):
+                return io.BytesIO(__import__("json").dumps(files).encode())
+            if "/integrity/" in url:
+                raise urllib.error.HTTPError(url, 404, "Not Found", {}, io.BytesIO(b"{}"))
+            raise denied
+
+        with mock.patch.object(vp.urllib.request, "urlopen", side_effect=urlopen), mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GITHUB_TOKEN", None)
+            os.environ.pop("GH_TOKEN", None)
+            with self.assertRaises(vp.Unread) as caught:
+                vp.publisher_of(e, "0.3.3")
+        self.assertIn("HTTP 403", str(caught.exception))
+        self.assertIn("quota is spent", str(caught.exception))
+
+    def test_a_403_without_a_token_names_the_missing_token(self):
+        import io, urllib.error
+        denied = urllib.error.HTTPError("https://api.github.com/x", 403, "Forbidden", {}, io.BytesIO(b"{}"))
+        with mock.patch.object(vp.urllib.request, "urlopen", side_effect=denied), mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GITHUB_TOKEN", None)
+            os.environ.pop("GH_TOKEN", None)
+            with self.assertRaises(vp.Unread) as caught:
+                vp.fetch_json("https://api.github.com/x")
+        self.assertIn("no GITHUB_TOKEN was passed", str(caught.exception))
+
     def test_an_attestation_from_another_repository_names_that_repository(self):
         e = vp.Entry(registry="pypi", name="demo", version="0.3.3", source="lock", own=True, publisher="org/repo")
         files = {"urls": [{"filename": "demo-0.3.3.tar.gz", "digests": {"sha256": "c" * 64}}]}

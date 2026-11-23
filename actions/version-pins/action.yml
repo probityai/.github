@@ -21,6 +21,8 @@ runs:
       env:
         COMMAND: ${{ inputs.command }}
         SCRIPTS: ${{ github.action_path }}/../../scripts
+        # The registry check reads GitHub attestations; an anonymous read shares one quota per runner address.
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
         case "$COMMAND" in
           check | registry | badges | formulas) python3 -B "$SCRIPTS/version-pins.py" "$COMMAND" ;;
